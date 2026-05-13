@@ -34,7 +34,8 @@ use crate::state::SharedState;
 pub(crate) const PLUGIN_ID: &str = "com.novo-notes.wxp-example-gain";
 
 // 各 parameter にも host 内で一意の ID を割り当てる必要がある。
-// gain がひとつだけなので 1 を割り振っている。
+// 新しい parameter を追加するときは、ここに `PARAM_*_ID` を増やし、下の
+// `PluginParameters` 実装と `SharedState` の match にも追加する。
 pub(crate) const PARAM_GAIN_ID: u32 = 1;
 
 // gain の値域。1.0 が「そのまま (0 dB)」、0.0 が「無音 (-inf dB)」、
@@ -233,68 +234,49 @@ impl PluginConfigurableAudioPorts for WxpExampleGainPlugin {
 // ---------------------------------------------------------------------------
 // PluginParameters: parameter の宣言と現在値のやり取り
 // ---------------------------------------------------------------------------
-// host から見える parameter API。今回は gain ひとつだけなので、id が
-// `PARAM_GAIN_ID` 以外の問い合わせはすべて `InvalidParameter` を返す。
+// host から見える parameter API。template 利用時に parameter を増やす場合は、
+// ここが host に公開する schema と文字列表現の追加ポイントになる。
 impl PluginParameters for WxpExampleGainPlugin {
     fn parameter_count(&self) -> u32 {
+        // 新しい parameter を追加するときは、この数と `parameter_info()` の match を
+        // 一緒に更新する。
         1
     }
 
     fn parameter_info(&self, index: u32) -> Option<ParameterInfo> {
-        (index == 0).then_some(ParameterInfo {
-            id: PARAM_GAIN_ID,
-            name: "Gain",
-            module: "",
-            min_value: MIN_GAIN as f64,
-            max_value: MAX_GAIN as f64,
-            default_value: DEFAULT_GAIN as f64,
-            flags: ParameterFlags {
-                // automation 可能であることを host に伝える。これが false だと
-                // DAW で parameter を自動化できなくなる。
-                is_automatable: true,
-                ..ParameterFlags::default()
-            },
-        })
+        // 新しい parameter を追加するときは、index と stable id の対応をここに追加する。
+        // id は DAW project / automation に保存されるので、一度公開した値は変えない。
+        match index {
+            0 => Some(gain_parameter_info()),
+            _ => None,
+        }
     }
 
     /// host が「今この parameter の値はいくつ?」と尋ねてきたときに答える。
     fn parameter_value(&self, parameter_id: u32) -> PluginResult<f64> {
-        if parameter_id != PARAM_GAIN_ID {
-            return Err(PluginError::InvalidParameter);
-        }
-        Ok(self.shared.gain() as f64)
+        self.shared
+            .parameter_value(parameter_id)
+            .map(|value| value as f64)
+            .ok_or(PluginError::InvalidParameter)
     }
 
     /// host から input event として parameter 値が届いたときの経路。
     fn apply_parameter_value(&self, event: ParameterValueEvent) -> PluginResult<f64> {
-        if event.parameter_id != PARAM_GAIN_ID {
-            return Err(PluginError::InvalidParameter);
-        }
-        let gain = self.shared.set_gain(event.value);
-        Ok(gain as f64)
+        let value = self
+            .shared
+            .set_parameter_value(event.parameter_id, event.value)
+            .ok_or(PluginError::InvalidParameter)?;
+        Ok(value as f64)
     }
 
     /// 内部値 → 表示文字列。例: 1.0 → "0.0 dB"。
     fn parameter_value_to_text(&self, parameter_id: u32, value: f64) -> PluginResult<String> {
-        if parameter_id != PARAM_GAIN_ID {
-            return Err(PluginError::InvalidParameter);
-        }
-        Ok(gain_db_text(clamp_gain(value as f32) as f64))
+        parameter_value_text(parameter_id, value)
     }
 
     /// 表示文字列 → 内部値。ユーザーが host UI に "3 dB" のように入力したとき呼ばれる。
     fn parameter_text_to_value(&self, parameter_id: u32, text: &str) -> PluginResult<f64> {
-        if parameter_id != PARAM_GAIN_ID {
-            return Err(PluginError::InvalidParameter);
-        }
-
-        let text = text.trim();
-        let text = text.strip_suffix("dB").unwrap_or(text).trim();
-        let db = text
-            .parse::<f64>()
-            .map_err(|_| PluginError::InvalidParameter)?;
-        // dB → 線形 amplitude に変換してから clamp。
-        Ok(clamp_gain(10.0_f64.powf(db / 20.0) as f32) as f64)
+        parameter_text_value(parameter_id, text)
     }
 }
 
@@ -316,8 +298,11 @@ impl PluginStateSupport for WxpExampleGainPlugin {
     fn restore_state(&mut self, state: PluginState) -> PluginResult<()> {
         let state: SavedPluginState =
             serde_json::from_slice(&state.bytes).map_err(|_| PluginError::InvalidState)?;
-        let gain = self.shared.set_gain(state.gain as f64);
-        self.gui_notifier.notify_gain(gain);
+        let gain = self
+            .shared
+            .set_parameter_value(PARAM_GAIN_ID, state.gain as f64)
+            .ok_or(PluginError::InvalidParameter)?;
+        self.gui_notifier.notify_parameter(PARAM_GAIN_ID, gain);
         Ok(())
     }
 }
@@ -325,6 +310,52 @@ impl PluginStateSupport for WxpExampleGainPlugin {
 /// gain を有効範囲に収める。外部から来た値はすべてこれを通してから使う。
 pub(crate) fn clamp_gain(gain: f32) -> f32 {
     gain.clamp(MIN_GAIN, MAX_GAIN)
+}
+
+fn gain_parameter_info() -> ParameterInfo {
+    ParameterInfo {
+        id: PARAM_GAIN_ID,
+        name: "Gain",
+        module: "",
+        min_value: MIN_GAIN as f64,
+        max_value: MAX_GAIN as f64,
+        default_value: DEFAULT_GAIN as f64,
+        flags: ParameterFlags {
+            // automation 可能であることを host に伝える。これが false だと
+            // DAW で parameter を自動化できなくなる。
+            is_automatable: true,
+            ..ParameterFlags::default()
+        },
+    }
+}
+
+/// parameter の plain value を表示文字列へ変換する。
+///
+/// 新しい parameter を追加するときは、この `match parameter_id` に表示変換を追加する。
+/// GUI payload の `text` もこの関数を使うため、host UI と plugin GUI の表示が揃う。
+pub(crate) fn parameter_value_text(parameter_id: u32, value: f64) -> PluginResult<String> {
+    match parameter_id {
+        PARAM_GAIN_ID => Ok(gain_db_text(clamp_gain(value as f32) as f64)),
+        _ => Err(PluginError::InvalidParameter),
+    }
+}
+
+/// parameter の表示文字列を plain value へ戻す。
+///
+/// 新しい parameter を追加するときは、この `match parameter_id` に parse 処理を追加する。
+fn parameter_text_value(parameter_id: u32, text: &str) -> PluginResult<f64> {
+    match parameter_id {
+        PARAM_GAIN_ID => {
+            let text = text.trim();
+            let text = text.strip_suffix("dB").unwrap_or(text).trim();
+            let db = text
+                .parse::<f64>()
+                .map_err(|_| PluginError::InvalidParameter)?;
+            // dB → 線形 amplitude に変換してから clamp。
+            Ok(clamp_gain(10.0_f64.powf(db / 20.0) as f32) as f64)
+        }
+        _ => Err(PluginError::InvalidParameter),
+    }
 }
 
 fn audio_port_type(channel_count: u32) -> AudioPortType {

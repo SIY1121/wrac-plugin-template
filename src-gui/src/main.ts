@@ -17,14 +17,20 @@
 import { Channel, invoke } from "@novonotes/webview-bridge";
 import "./style.css";
 
-/** Type definition matching the JSON produced by gain_payload() on the Rust side */
-type GainState = {
-  type: "gain-state";
-  /** Linear gain value (0.0–2.0) */
+/** Type definition matching the JSON produced by parameter_payload() on the Rust side */
+type ParameterState = {
+  type: "parameter-value";
+  /** Stable parameter id used by the native plugin and host automation */
+  parameterId: number;
+  /** Plain parameter value */
   value: number;
-  /** Gain as a dB string (e.g., "-6.0 dB") */
-  dbText: string;
+  /** Parameter value formatted by the Rust side */
+  text: string;
 };
+
+// Keep these ids in sync with PARAM_* constants in src-plugin/src/plugin.rs.
+// When adding parameters to the template, add one id here and route its UI in render().
+const PARAM_GAIN_ID = 1;
 
 // Gain range. Must match MIN_GAIN / MAX_GAIN on the Rust side.
 const MIN_GAIN = 0;
@@ -57,20 +63,22 @@ let gestureActive = false;
 // -----------------------------------------------------------------------
 // Create a Channel and register it with the Rust side as the target for parameter change
 // notifications. When the host changes the gain via automation, this callback updates the UI.
-const channel = new Channel<GainState>((message) => {
-  if (message && message.type === "gain-state") {
+const channel = new Channel<ParameterState>((message) => {
+  if (message && message.type === "parameter-value") {
     render(message);
   }
 });
 
 // Initialization: fetch the current gain state, render the UI, and subscribe to changes.
 void (async () => {
-  // Call the Rust "get_gain_state" command via invoke().
-  const initialState = await invoke<GainState>("get_gain_state");
+  // Call the Rust "get_parameter_state" command via invoke().
+  const initialState = await invoke<ParameterState>("get_parameter_state", {
+    parameterId: PARAM_GAIN_ID,
+  });
   render(initialState);
   // Passing the Channel as an argument lets the Rust side call Channel::send()
   // to push messages to this callback.
-  await invoke("subscribe_gain", { channel });
+  await invoke("subscribe_parameters", { channel });
 })();
 
 function clamp(value: number): number {
@@ -83,11 +91,14 @@ function gainToAngle(value: number): number {
   return MIN_ANGLE + normalized * (MAX_ANGLE - MIN_ANGLE);
 }
 
-/** Receives a gain state and updates the UI display */
-function render(state: GainState): void {
+/** Receives a parameter state and updates the matching UI display */
+function render(state: ParameterState): void {
+  if (state.parameterId !== PARAM_GAIN_ID) {
+    return;
+  }
   gain = clamp(state.value);
   valueLabel.textContent = `${gain.toFixed(2)}x`;
-  dbLabel.textContent = state.dbText;
+  dbLabel.textContent = state.text;
   const angle = gainToAngle(gain);
   indicator.style.transform = `rotate(${angle}deg)`;
   fill.style.transform = `rotate(${angle}deg)`;
@@ -107,7 +118,7 @@ function beginGesture(): void {
   gestureActive = true;
   // Call the Rust begin_parameter_gesture command via invoke().
   // void = fire-and-forget (do not await the result).
-  void invoke("begin_parameter_gesture");
+  void invoke("begin_parameter_gesture", { parameterId: PARAM_GAIN_ID });
 }
 
 function endGesture(): void {
@@ -115,7 +126,7 @@ function endGesture(): void {
     return;
   }
   gestureActive = false;
-  void invoke("end_parameter_gesture");
+  void invoke("end_parameter_gesture", { parameterId: PARAM_GAIN_ID });
 }
 
 /** Sets the gain, immediately updates the UI, and notifies the Rust side */
@@ -123,13 +134,16 @@ function applyGain(nextGain: number): void {
   const value = clamp(nextGain);
   // Render locally without waiting for a Rust response, for responsiveness.
   render({
-    type: "gain-state",
+    type: "parameter-value",
+    parameterId: PARAM_GAIN_ID,
     value,
-    dbText:
-      value <= 0 ? "-inf dB" : `${(20 * Math.log10(value)).toFixed(1)} dB`,
+    text: value <= 0 ? "-inf dB" : `${(20 * Math.log10(value)).toFixed(1)} dB`,
   });
-  // Update the parameter via the Rust "set_gain" command.
-  void invoke("set_gain", { value });
+  // Update the parameter via the Rust "set_parameter_value" command.
+  void invoke("set_parameter_value", {
+    parameterId: PARAM_GAIN_ID,
+    value,
+  });
 }
 
 // -----------------------------------------------------------------------
@@ -192,5 +206,5 @@ knob.addEventListener("wheel", (event) => {
 // End any active gesture and unsubscribe before the WebView closes.
 window.addEventListener("beforeunload", () => {
   endGesture();
-  void invoke("unsubscribe_gain");
+  void invoke("unsubscribe_parameters");
 });

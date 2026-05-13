@@ -64,7 +64,10 @@ impl Processor for WxpExampleGainAudioProcessor {
             // 今回扱うのは gain の parameter event だけ。それ以外 (note 等) は無視。
             if let InputEvent::ParamValue(event) = event {
                 if event.parameter_id == PARAM_GAIN_ID {
-                    gain = self.shared.set_gain(event.value);
+                    gain = self
+                        .shared
+                        .set_parameter_value(event.parameter_id, event.value)
+                        .unwrap_or(gain);
                 }
             }
         }

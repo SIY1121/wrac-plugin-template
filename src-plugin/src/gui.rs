@@ -3,7 +3,7 @@
 //! GUI 本体は HTML/CSS/TypeScript で書かれており (`src-gui/` 以下)、
 //! これを embed した WebView を host window に貼り付けるのがこの module の
 //! 役目。WebView との通信は [`wxp`] crate の command/channel 機構を使い、
-//! frontend から `set_gain` などの command を invoke できる。
+//! frontend から `set_parameter_value` などの command を invoke できる。
 //!
 //! 役割分担:
 //! - `wrac_wxp_gui`: host UI thread の所有、callback dispatch、parent window
@@ -31,7 +31,7 @@ use wxp::{
 };
 
 use crate::commands::register_commands;
-use crate::plugin::gain_db_text;
+use crate::plugin::{PARAM_GAIN_ID, parameter_value_text};
 use crate::state::SharedState;
 
 // GUI window のサイズ範囲 (pixel)。host は initial size でウインドウを開き、
@@ -103,7 +103,7 @@ pub(crate) fn create_gui_integration(
     }
 }
 
-/// WebView 側へ gain state を push するための通知口。
+/// WebView 側へ parameter state を push するための通知口。
 ///
 /// [`Channel`] と UI run loop の扱いは GUI runtime 固有なので、共有 state ではなく
 /// GUI module に閉じ込める。通知タイミング自体は呼び出し元が決める。
@@ -137,13 +137,13 @@ impl GuiStateNotifier {
         *self.subscription.lock() = None;
     }
 
-    pub(crate) fn notify_gain(&self, gain: f32) {
+    pub(crate) fn notify_parameter(&self, parameter_id: u32, value: f32) {
         let Some(subscription) = self.subscription.lock().clone() else {
             // GUI が開いていなければ通知不要。
             return;
         };
 
-        let payload = gain_payload(gain);
+        let payload = parameter_payload(parameter_id, value);
         // WebView channel は GUI runtime と同じ UI thread 上で扱う必要がある。
         // host / audio thread から直接 send すると native UI の thread affinity を
         // 破るので、いったん run loop に戻してから channel に渡す。
@@ -154,11 +154,15 @@ impl GuiStateNotifier {
 }
 
 /// WebView へ送る JSON payload。GUI (TypeScript 側) はこの形を期待している。
-pub(crate) fn gain_payload(gain: f32) -> serde_json::Value {
+///
+/// 新しい parameter を追加しても payload の形は変えず、`parameterId` と `text` の中身だけを
+/// 増やす。UI 側は parameter id ごとに表示先を選べばよい。
+pub(crate) fn parameter_payload(parameter_id: u32, value: f32) -> serde_json::Value {
     json!({
-        "type": "gain-state",
-        "value": gain,
-        "dbText": gain_db_text(gain as f64),
+        "type": "parameter-value",
+        "parameterId": parameter_id,
+        "value": value,
+        "text": parameter_value_text(parameter_id, value as f64).unwrap_or_else(|_| value.to_string()),
     })
 }
 
@@ -198,7 +202,7 @@ impl WxpExampleGainGuiRuntime {
             return Err(PluginError::Message("unsupported GUI configuration"));
         }
 
-        // WebView から呼べる command (set_gain など) を登録する。
+        // WebView から呼べる parameter command を登録する。
         let command_handler = Rc::new(WxpCommandHandler::new());
         register_commands(
             command_handler.clone(),
@@ -264,7 +268,7 @@ impl WxpExampleGainGuiRuntime {
             let shared = shared.clone();
             let gui_notifier = gui_notifier.clone();
             move || {
-                gui_notifier.notify_gain(shared.gain());
+                gui_notifier.notify_parameter(PARAM_GAIN_ID, shared.gain());
             }
         });
         gui_update_timer.start();

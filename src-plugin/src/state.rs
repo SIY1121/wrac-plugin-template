@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use atomic_float::AtomicF32;
 
-use crate::plugin::{DEFAULT_GAIN, clamp_gain};
+use crate::plugin::{DEFAULT_GAIN, PARAM_GAIN_ID, clamp_gain};
 
 /// audio processor / GUI / host からの問い合わせ が共有する thread-safe な state。
 ///
@@ -35,12 +35,31 @@ impl SharedState {
         self.gain.load(Ordering::Acquire)
     }
 
-    /// 外部から来た gain を有効範囲に収めて SoT に保存する。
-    pub(crate) fn set_gain(&self, gain: f64) -> f32 {
-        // 範囲外の値が automation/UI から来ても問題ないように、必ず clamp してから保存する。
-        let gain = clamp_gain(gain as f32);
-        self.gain.store(gain, Ordering::Release);
-        gain
+    /// 指定された parameter の現在値を返す。
+    ///
+    /// 新しい parameter を追加するときは、この `match parameter_id` に読み出し処理を
+    /// 追加する。GUI command は parameter id だけを見るので、command 名は増やさなくてよい。
+    pub(crate) fn parameter_value(&self, parameter_id: u32) -> Option<f32> {
+        match parameter_id {
+            PARAM_GAIN_ID => Some(self.gain()),
+            _ => None,
+        }
+    }
+
+    /// 外部から来た parameter 値を有効範囲に収めて SoT に保存する。
+    ///
+    /// 新しい parameter を追加するときは、この `match parameter_id` に保存処理を
+    /// 追加する。各 parameter の clamp / normalization はここで完結させる。
+    pub(crate) fn set_parameter_value(&self, parameter_id: u32, value: f64) -> Option<f32> {
+        match parameter_id {
+            PARAM_GAIN_ID => {
+                // 範囲外の値が automation/UI から来ても問題ないように、必ず clamp してから保存する。
+                let gain = clamp_gain(value as f32);
+                self.gain.store(gain, Ordering::Release);
+                Some(gain)
+            }
+            _ => None,
+        }
     }
 }
 
