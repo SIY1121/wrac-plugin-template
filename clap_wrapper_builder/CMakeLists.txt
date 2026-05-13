@@ -80,10 +80,10 @@ if(APPLE)
   )
 endif()
 # Generate the source file for the CLAP entry point.
-# The CLAP entry point itself is provided by clack and lives inside
-# CLAP_WRAPPER_BUILDER_TARGET_LIB. Calling get_clap_entry() from here
-# prevents the clap_entry symbol inside CLAP_WRAPPER_BUILDER_TARGET_LIB
-# from being stripped, ensuring it is correctly retained in the DLL.
+# The CLAP entry point itself is provided by the plugin binary and lives
+# inside CLAP_WRAPPER_BUILDER_TARGET_LIB. Calling get_clap_entry() from here
+# prevents the clap_entry symbol inside CLAP_WRAPPER_BUILDER_TARGET_LIB from
+# being stripped, ensuring it is correctly retained in the DLL.
 set(ENTRY_SOURCE_FILE "${CMAKE_CURRENT_BINARY_DIR}/${PLUGIN_NAME_SAFE}_entry.cpp")
 file(WRITE ${ENTRY_SOURCE_FILE} "
 #include <clap/clap.h>

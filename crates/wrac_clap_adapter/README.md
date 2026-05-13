@@ -12,6 +12,10 @@ CLAP のヘッダには、各関数を呼び出してよい thread が `[main-th
 
 一方、本 crate は `clap-wrapper` 経由の VST3 / AU / AAX host も対象とします。これらの host を経由すると、`[main-thread]` 指定の query が別 thread から呼ばれるなど、コメント通りの呼び出し順・呼び出し thread にならない場合があります。本 crate はこれを adapter 側の lock と panic 捕捉で受け、製品コードに `unsafe` を露出させずに動作させることを目的としています。
 
+## 謝辞
+
+`wrac_clap_adapter` は、`clack` の safe で low-level な CLAP wrapper 設計、特に CLAP extension 境界と audio buffer access の考え方を参考にさせていただきました。本 crate は `clack` のコード派生ではなく、`clap-wrapper` 経由の配布で defensive に動作することを目的にした独立の `clap-sys` adapter です。
+
 ## Public API
 
 - `PluginCore`: instance lifecycle と、サポートする extension の宣言
