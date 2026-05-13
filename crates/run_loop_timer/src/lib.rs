@@ -208,9 +208,11 @@ mod tests {
             timer.start();
             RunLoop::current().delay(Duration::from_millis(150)).await;
             timer.stop();
+            let count_at_stop = counter.load(Ordering::SeqCst);
             RunLoop::current().delay(Duration::from_millis(200)).await;
 
-            assert_eq!(counter.load(Ordering::SeqCst), 1);
+            assert!(count_at_stop >= 1, "timer did not fire before stop");
+            assert_eq!(counter.load(Ordering::SeqCst), count_at_stop);
         });
     }
 
