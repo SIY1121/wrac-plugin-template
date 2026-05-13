@@ -62,6 +62,10 @@ struct TimerInner {
 ///
 /// 作成、開始、停止、破棄は同じ run loop thread 上で行う前提です。`stop()` または
 /// drop により次回の schedule は cancel されます。
+///
+/// RunLoop の timer cadence は OS や実行環境に依存するため、この型は指定 interval
+/// どおりの発火回数や高精度な周期を保証しません。GUI の状態反映など、遅延や間引きを
+/// 許容できる用途を想定しています。
 pub struct Timer {
     inner: Rc<TimerInner>,
 }
@@ -196,7 +200,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn stop_cancels_next_schedule() {
+    fn stop_prevents_future_ticks_after_observed_fire() {
         run_async(async {
             let counter = Arc::new(AtomicU32::new(0));
             let counter_clone = counter.clone();
@@ -211,6 +215,8 @@ mod tests {
             let count_at_stop = counter.load(Ordering::SeqCst);
             RunLoop::current().delay(Duration::from_millis(200)).await;
 
+            // The exact count is not part of the Timer contract. Headless CI and
+            // GUI hosts may run the underlying RunLoop timers at different cadences.
             assert!(count_at_stop >= 1, "timer did not fire before stop");
             assert_eq!(counter.load(Ordering::SeqCst), count_at_stop);
         });
