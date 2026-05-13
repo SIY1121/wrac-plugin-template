@@ -17,7 +17,7 @@ jobs:
     runs-on: macos-14
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
-      WRY_OBJC_SUFFIX: WxpExampleGainPlugin
+      WRY_OBJC_SUFFIX: WracGainPlugin
 
     steps:
       - name: Checkout repository
@@ -45,10 +45,10 @@ jobs:
         run: npm run build
 
       - name: Check Rust plugin
-        run: cargo check --locked --package wxp_example_gain_plugin
+        run: cargo check --locked --package wrac_gain_plugin
 
       - name: Build CLAP bundle
         run: ./script/build.sh Release
 
       - name: Verify CLAP bundle
-        run: test -d "target/bundled/WXP Example Gain.clap"
+        run: test -d "target/bundled/WRAC Gain.clap"

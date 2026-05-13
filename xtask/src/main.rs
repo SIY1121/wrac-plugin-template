@@ -139,7 +139,7 @@ impl Context {
     }
 
     fn wrapper_build_dir(&self) -> PathBuf {
-        self.wrapper_dir.join("build_WXP_Example_Gain")
+        self.wrapper_dir.join("build_WRAC_Gain")
     }
 
     fn vst3_bundle(&self, profile: Profile) -> PathBuf {

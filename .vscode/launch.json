@@ -9,7 +9,7 @@
 			"osx": {
 				"request": "attach",
 				"program": "${workspaceFolder}/target/standalone/Debug/WRAC Gain Standalone.app/Contents/MacOS/WRAC Gain Standalone",
-				"preLaunchTask": "build-and-open-example-gain-standalone"
+				"preLaunchTask": "build-and-open-wrac-gain-standalone"
 			},
 			"windows": {
 				"program": "${workspaceFolder}/target/standalone/Debug/WRAC Gain Standalone.exe"
@@ -20,7 +20,7 @@
 				"RUST_BACKTRACE": "1"
 			},
 			"terminal": "console",
-			"preLaunchTask": "build-example-gain-standalone"
+			"preLaunchTask": "build-wrac-gain-standalone"
 		}
 	]
 }
