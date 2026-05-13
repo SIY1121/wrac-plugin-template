@@ -181,6 +181,10 @@ EOF
         # making it a portable bundle that does not depend on the installation path.
         install_name_tool -id "@loader_path/WXP Example Gain" \
             "$BUNDLE_DIR/Contents/MacOS/WXP Example Gain"
+
+        # Ad-hoc sign the bundle so macOS validators and wrapper bundles can
+        # verify nested code consistently during local development.
+        codesign --force --sign - --timestamp=none "$BUNDLE_DIR"
         ;;
     windows)
         # On Windows, simply place the .dll as-is with the .clap extension.

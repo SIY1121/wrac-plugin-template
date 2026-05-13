@@ -1,3 +1,9 @@
+//! release build 時に `src-gui/dist` を 1 つの zip にまとめて `OUT_DIR` に出力する build script。
+//!
+//! 出力された zip は `gui.rs` で `include_bytes!` により plugin バイナリへ
+//! 埋め込まれ、実行時に WebView が `wxp-plugin://` scheme として配信する。
+//! debug build では Vite dev server を使うので、このスクリプトは何もしない。
+
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -8,11 +14,13 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 fn main() {
+    // frontend ソースが変わったら再ビルドする (zip を作り直す) ように Cargo に伝える。
     println!("cargo:rerun-if-changed=../src-gui/index.html");
     println!("cargo:rerun-if-changed=../src-gui/src");
     println!("cargo:rerun-if-changed=../src-gui/package.json");
     println!("cargo:rerun-if-changed=../src-gui/vite.config.ts");
 
+    // debug build 時は zip を作らない (Vite dev server を使うため)。
     if env::var("PROFILE").ok().as_deref() != Some("release") {
         return;
     }
@@ -26,6 +34,7 @@ fn main() {
     let out_zip = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"))
         .join("wxp_example_gain_plugin_gui.zip");
 
+    // release build の前に `npm run build` を回し忘れていた場合は早めに止める。
     if !gui_dist_dir.exists() {
         panic!(
             "frontend build output was not found at {}. Run `npm install && npm run build` in src-gui before release builds.",
@@ -36,6 +45,7 @@ fn main() {
     create_zip(&gui_dist_dir, &out_zip).expect("failed to create frontend zip");
 }
 
+/// `src_dir` 以下を丸ごと deflate 圧縮の zip にまとめて `out_zip` に書き出す。
 fn create_zip(src_dir: &Path, out_zip: &Path) -> io::Result<()> {
     let file = File::create(out_zip)?;
     let mut zip = ZipWriter::new(file);
@@ -46,6 +56,10 @@ fn create_zip(src_dir: &Path, out_zip: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// directory を再帰的に walk して zip へ追加する。
+///
+/// build を decisive (= 同じ入力なら常に同じ出力) にするため、entry を
+/// path 順に sort してから処理する。
 fn add_directory_contents(
     root: &Path,
     current: &Path,
@@ -60,6 +74,7 @@ fn add_directory_contents(
         let relative = path
             .strip_prefix(root)
             .expect("walked path must be inside root");
+        // zip 内部は OS 非依存の `/` 区切りに揃える (Windows 対策)。
         let zip_path = relative.to_string_lossy().replace('\\', "/");
 
         if path.is_dir() {

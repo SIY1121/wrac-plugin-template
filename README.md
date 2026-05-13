@@ -26,8 +26,18 @@ The WRAC stack is a technology stack for audio plugin development, built around 
 ## Contents
 
 - WebView GUI implementation using [wxp](https://github.com/novonotes/wxp)
-- CLAP plugin implementation in Rust using [clack](https://github.com/prokopyl/clack)
+- CLAP plugin implementation in Rust using `clap-sys`
 - VST3 and AU plugin builds via [clap-wrapper](https://github.com/free-audio/clap-wrapper)
+
+## Build
+
+```bash
+cargo xtask build
+cargo xtask build --release
+cargo xtask build --validate
+```
+
+On macOS, `--validate` runs the VST3 validator and `auval -v aufx WxGn NvNt`.
 
 
 ## Setting Up a New Project
@@ -37,15 +47,13 @@ To create a new wxp plugin based on this repository, see [Setup](docs/setup.md).
 
 ## Give it a spin?
 
-his template comes with a simple Gain plugin pre-implemented. Try loading it up and let us know how it works in your DAW! 
+This template comes with a simple Gain plugin pre-implemented. Try loading it up and let us know how it works in your DAW!
 Even a quick comment like **"Works on Logic Pro 10.7"** is incredibly helpful for the community.
 
 Feel free to drop a quick note here:
 👉 [DAW Compatibility Reports](https://github.com/novonotes/wrac-plugin-template/discussions/6)
 
 ## Reference
-
-For details on the thread model, communication flow, and parameter change flow, see [docs/architecture.md](docs/architecture.md).
 
 For usage of the wxp crate, see the [wxp README](https://github.com/novonotes/wxp/tree/main/crates/wxp).
 
