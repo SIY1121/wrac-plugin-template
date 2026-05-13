@@ -16,11 +16,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use run_loop_timer::Timer;
-use wrac_clap_adapter::{GuiConfiguration, GuiSize, PluginError, PluginResult};
+use wrac_clap_adapter::{
+    GuiConfiguration, GuiSize, HostParameterEditNotifier, PluginError, PluginResult,
+};
 use wrac_wxp_gui::{DpiConverter, ParentWindowHandle, WxpGuiRuntime, gui_size_to_logical};
 use wxp::{WebContext, WebViewRef, WxpCommandHandler, WxpWebViewBuilder, dpi::LogicalSize};
 
-use crate::plugin::{SharedStateInner, register_commands};
+use crate::plugin::{SharedState, register_commands};
 
 // resize 時にクランプする論理ピクセルの上下限。
 const MIN_GUI_SIZE: LogicalSize<f64> = LogicalSize::new(280.0, 280.0);
@@ -36,7 +38,7 @@ const FRONTEND_ZIP: &[u8] =
 /// 閉じるときに drop される。
 pub(crate) struct WxpExampleGainGuiRuntime {
     // 共有 state。値の更新通知や WebView channel の登録に使う。
-    shared: Arc<SharedStateInner>,
+    shared: Arc<SharedState>,
     // 表示中の WebView。Option にしてあるのは Drop の順序を制御するため。
     web_view: Option<WebViewRef>,
     // wxp の WebContext。WebView より長く生かしておく必要があるので保持する。
@@ -55,7 +57,8 @@ impl WxpExampleGainGuiRuntime {
     /// host が「GUI を開いて」と要求してきたタイミングで `plugin.rs` の closure
     /// から呼ばれる factory。parent window に貼り付ける WebView を作って返す。
     pub(crate) fn create(
-        shared: Arc<SharedStateInner>,
+        shared: Arc<SharedState>,
+        host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
         configuration: GuiConfiguration,
         initial_size: GuiSize,
         parent: ParentWindowHandle,
@@ -68,7 +71,11 @@ impl WxpExampleGainGuiRuntime {
 
         // WebView から呼べる command (set_gain など) を登録する。
         let command_handler = Rc::new(WxpCommandHandler::new());
-        register_commands(command_handler.clone(), shared.clone());
+        register_commands(
+            command_handler.clone(),
+            shared.clone(),
+            host_parameter_edit_notifier,
+        );
 
         // WebView の cache/cookie などを置く data directory。
         let data_dir = std::env::temp_dir().join("wxp-example-gain-plugin");

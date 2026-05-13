@@ -5,7 +5,7 @@
 //! 1. plugin の自己紹介情報 (`PLUGIN_DESCRIPTOR`) を宣言する
 //! 2. parameter 定義 (gain ひとつだけ) を host に教える
 //! 3. parameter の現在値を audio thread / GUI / host から触れる
-//!    `SharedStateInner` を持つ
+//!    `SharedState` を持つ
 //! 4. host から `activate` されたら audio 処理用の `Processor` を作る
 //! 5. host から GUI を開かれたら WebView runtime を作る
 //! 6. state の save/restore (DAW の project に保存) を実装する
@@ -94,8 +94,8 @@ pub(crate) const PLUGIN_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
 /// この struct 自身は lifecycle と factory の役目に徹する。
 pub(crate) struct WxpExampleGainCore {
     // audio thread / GUI / host から共有して触る状態。
-    // 詳細は `SharedStateInner` の doc を参照。
-    shared: Arc<SharedStateInner>,
+    // 詳細は `SharedState` の doc を参照。
+    shared: Arc<SharedState>,
     // WebView による GUI を CLAP の GUI extension として扱うための helper。
     // `Arc` にしているのは host が `plugin_gui` を複数回問い合わせるため。
     gui: Arc<WxpGuiController>,
@@ -109,23 +109,19 @@ pub(crate) struct WxpExampleGainCore {
 /// - host thread  : `parameter_base_value()` などで host が値を尋ねてくる
 ///
 /// そのため値の "Single Source of Truth (SoT)" を `WxpExampleGainCore` の私有
-/// field に置くのではなく、`Arc<SharedStateInner>` として共有する。lock 不要な
+/// field に置くのではなく、`Arc<SharedState>` として共有する。lock 不要な
 /// `AtomicF32` を使うことで audio thread を待たせない実装になっている。
 ///
 /// `WxpExampleGainCore` 自身は lifecycle (activate/deactivate) と factory の
 /// 境界を持ち、real-time に読みたい値はすべてこの共有 state 経由に統一する。
-pub(crate) struct SharedStateInner {
+pub(crate) struct SharedState {
     // gain の現在値 (線形 amplitude)。lock-free に読み書きする。
     gain: AtomicF32,
     // 現在の audio channel 数 (mono なら 1、stereo なら 2)。
     // host が port 構成を変えてきた場合に書き換えられる。
     audio_channel_count: AtomicU32,
-    // GUI から「parameter を編集中」と host に伝えるための proxy。
-    // GUI 側が直接 CLAP/VST3/AU の callback pointer に触らなくて済むよう、
-    // adapter が trait object に包んで渡してくれる。
-    host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
     // automation 等で gain が更新されたが、まだ GUI に反映していないことを示す flag。
-    // 詳細は `set_gain_from_automation` の解説を参照。
+    // 詳細は `mark_gui_notification_pending` の解説を参照。
     pending_gui_notification: AtomicBool,
     // GUI が開いている間だけ Some。GUI 側 (WebView) に値の変化を push するための
     // channel と、UI thread の run loop に戻すための sender。
@@ -153,17 +149,20 @@ pub(crate) struct SavedPluginState {
 
 impl WxpExampleGainCore {
     pub(crate) fn new(context: PluginCoreContext) -> Self {
-        let shared = Arc::new(SharedStateInner::new(context));
+        let shared = Arc::new(SharedState::new());
+        let host_parameter_edit_notifier = context.host_parameter_edit_notifier;
 
         // GUI は遅延生成 (host が `create_gui` を呼ぶまで作らない) する必要があるので、
         // ここでは「GUI が要求されたときに runtime を作る closure」だけ用意して
         // `WxpGuiController` に渡す。closure は shared を捕獲して runtime に渡す。
         let gui_shared = shared.clone();
+        let gui_host_parameter_edit_notifier = host_parameter_edit_notifier.clone();
         let gui = Arc::new(
             WxpGuiController::new(
                 move |configuration, initial_size, parent| {
                     WxpExampleGainGuiRuntime::create(
                         gui_shared.clone(),
+                        gui_host_parameter_edit_notifier.clone(),
                         configuration,
                         initial_size,
                         parent,
@@ -239,7 +238,7 @@ impl PluginCore for WxpExampleGainCore {
 // PluginAudioPorts: audio 入出力 port の宣言
 // ---------------------------------------------------------------------------
 // gain plugin なので「main in 1 つ」「main out 1 つ」のシンプルな構成。
-// channel 数は `SharedStateInner::audio_channel_count` から動的に取り出す。
+// channel 数は `SharedState::audio_channel_count` から動的に取り出す。
 impl PluginAudioPorts for WxpExampleGainCore {
     fn audio_port_count(&self, _is_input: bool) -> u32 {
         1
@@ -340,12 +339,14 @@ impl PluginParameters for WxpExampleGainCore {
         Ok(self.shared.gain() as f64)
     }
 
-    /// host 側から parameter 値を書き換えに来たとき (preset 読み込みなど) の経路。
+    /// host から input event として parameter 値が届いたときの経路。
     fn apply_parameter_value(&self, event: ParameterValueEvent) -> PluginResult<f64> {
         if event.parameter_id != PARAM_GAIN_ID {
             return Err(PluginError::InvalidParameter);
         }
-        Ok(self.shared.set_gain_from_automation(event.value) as f64)
+        let gain = self.shared.set_gain(event.value);
+        self.shared.mark_gui_notification_pending();
+        Ok(gain as f64)
     }
 
     /// 内部値 → 表示文字列。例: 1.0 → "0.0 dB"。
@@ -390,29 +391,24 @@ impl PluginStateSupport for WxpExampleGainCore {
     fn restore_state(&mut self, state: PluginState) -> PluginResult<()> {
         let state: SavedPluginState =
             serde_json::from_slice(&state.bytes).map_err(|_| PluginError::InvalidState)?;
-        // host 経由の更新 → GUI への反映が必要なので `set_gain_from_host` を使う。
-        self.shared.set_gain_from_host(state.gain as f64);
+        self.shared.set_gain(state.gain as f64);
+        self.shared.notify_gui();
         Ok(())
     }
 }
 
 // ---------------------------------------------------------------------------
-// SharedStateInner: 共有 state の更新方法
+// SharedState: 共有 state と state 整合性のための操作
 // ---------------------------------------------------------------------------
-// 「誰が」値を更新したかによって追加の挙動 (GUI に通知する/host に通知する) が
-// 変わるので、メソッドを `_from_host` / `_from_automation` / `_from_ui` の
-// 3 系統に分けている。呼び出し側は迷ったら下記を参考に:
-//
-// - host (preset / state restore) 経由     : `set_gain_from_host`
-// - audio thread の automation event 経由 : `set_gain_from_automation`
-// - GUI の slider 操作経由                 : `set_gain_from_ui`
-impl SharedStateInner {
-    fn new(context: PluginCoreContext) -> Self {
+// ここでは clamp 済みの値を SoT に保存することと、GUI へ安全に通知する手段だけを
+// 提供する。host に edit 通知するか、GUI 通知を即時に行うか延期するかは呼び出し元の
+// workflow 側で決める。
+impl SharedState {
+    fn new() -> Self {
         Self {
             gain: AtomicF32::new(DEFAULT_GAIN),
             // template の default は stereo。host が configure してくれば書き換わる。
             audio_channel_count: AtomicU32::new(2),
-            host_parameter_edit_notifier: context.host_parameter_edit_notifier,
             pending_gui_notification: AtomicBool::new(false),
             gui_notifier: Mutex::new(None),
         }
@@ -431,42 +427,17 @@ impl SharedStateInner {
             .store(channel_count, Ordering::Release);
     }
 
-    /// host (state restore など) からの更新。GUI にも即座に反映を試みる。
-    pub(crate) fn set_gain_from_host(&self, gain: f64) -> f32 {
-        let gain = self.store_gain(gain);
-        self.notify_gui();
+    /// 外部から来た gain を有効範囲に収めて SoT に保存する。
+    pub(crate) fn set_gain(&self, gain: f64) -> f32 {
+        // 範囲外の値が automation/UI から来ても問題ないように、必ず clamp してから保存する。
+        let gain = clamp_gain(gain as f32);
+        self.gain.store(gain, Ordering::Release);
         gain
     }
 
-    /// audio thread の automation event 経由の更新。
-    ///
-    /// 注意点: automation は audio/process 経路で届くので、ここで WebView channel
-    /// や run loop sender を直接触ると real-time 制約と UI thread affinity を
-    /// 同時に壊しやすい。そこで audio-safe な SoT (`gain`) と dirty flag だけ
-    /// 更新し、実際の UI 反映は GUI runtime 側 (`gui.rs` の Timer) に任せる。
-    pub(crate) fn set_gain_from_automation(&self, gain: f64) -> f32 {
-        let gain = self.store_gain(gain);
+    /// audio/process 経路では GUI へ直接通知せず、GUI runtime の timer に反映を任せる。
+    pub(crate) fn mark_gui_notification_pending(&self) {
         self.pending_gui_notification.store(true, Ordering::Release);
-        gain
-    }
-
-    /// ユーザーが slider に指を置いた = 「これから連続編集を始める」と host に伝える。
-    /// DAW は次に来る複数の `update_edit` を 1 つの undo 単位にまとめる。
-    pub(crate) fn begin_gesture_from_ui(&self) {
-        self.host_parameter_edit_notifier.begin_edit(PARAM_GAIN_ID);
-    }
-
-    /// GUI 上で値が動いたときの更新。SoT を書き換えたうえで host にも通知する。
-    pub(crate) fn set_gain_from_ui(&self, gain: f64) -> f32 {
-        let gain = self.set_gain_from_host(gain);
-        self.host_parameter_edit_notifier
-            .update_edit(PARAM_GAIN_ID, gain as f64);
-        gain
-    }
-
-    /// slider から指を離した = 連続編集の終わり。
-    pub(crate) fn end_gesture_from_ui(&self) {
-        self.host_parameter_edit_notifier.end_edit(PARAM_GAIN_ID);
     }
 
     /// GUI が起動したときに WebView 向け channel を登録する。
@@ -484,14 +455,14 @@ impl SharedStateInner {
     }
 
     /// GUI runtime の timer から定期的に呼ばれる。
-    /// `set_gain_from_automation` で立てた dirty flag をここで回収して UI に流す。
+    /// `mark_gui_notification_pending` で立てた dirty flag をここで回収して UI に流す。
     pub(crate) fn flush_pending_gui_notification(&self) {
         if self.pending_gui_notification.swap(false, Ordering::AcqRel) {
             self.notify_gui();
         }
     }
 
-    fn notify_gui(&self) {
+    pub(crate) fn notify_gui(&self) {
         let Some(notifier) = self.gui_notifier.lock().clone() else {
             // GUI が開いていなければ通知不要。
             return;
@@ -504,13 +475,6 @@ impl SharedStateInner {
         notifier.sender.send(move || {
             let _ = notifier.channel.send(payload);
         });
-    }
-
-    fn store_gain(&self, gain: f64) -> f32 {
-        // 範囲外の値が automation/UI から来ても問題ないように、必ず clamp してから保存する。
-        let gain = clamp_gain(gain as f32);
-        self.gain.store(gain, Ordering::Release);
-        gain
     }
 }
 
@@ -589,7 +553,8 @@ pub(crate) fn gain_db_text(gain: f64) -> String {
 /// コードと約束事になっているので、変更するときは両側を揃える。
 pub(crate) fn register_commands(
     command_handler: Rc<WxpCommandHandler>,
-    shared: Arc<SharedStateInner>,
+    shared: Arc<SharedState>,
+    host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
 ) {
     // 現在の gain 値を取得 (GUI 起動直後の初期表示などに使う)。
     {
@@ -601,9 +566,9 @@ pub(crate) fn register_commands(
 
     // slider に触れ始めたタイミング。host に「これから undo 単位」と伝える。
     {
-        let shared = shared.clone();
+        let host_parameter_edit_notifier = host_parameter_edit_notifier.clone();
         command_handler.register_sync("begin_parameter_gesture", move |_ctx| {
-            shared.begin_gesture_from_ui();
+            host_parameter_edit_notifier.begin_edit(PARAM_GAIN_ID);
             Ok::<_, String>(json!({ "ok": true }))
         });
     }
@@ -611,18 +576,21 @@ pub(crate) fn register_commands(
     // slider が動いたタイミング。値を反映して host にも通知する。
     {
         let shared = shared.clone();
+        let host_parameter_edit_notifier = host_parameter_edit_notifier.clone();
         command_handler.register_sync("set_gain", move |ctx| {
             let value = ctx.arg::<f64>("value").map_err(|e| e.to_string())?;
-            let applied = shared.set_gain_from_ui(value);
+            let applied = shared.set_gain(value);
+            shared.notify_gui();
+            host_parameter_edit_notifier.update_edit(PARAM_GAIN_ID, applied as f64);
             Ok::<_, String>(gain_payload(applied))
         });
     }
 
     // slider から指を離したタイミング。undo 単位の終了を host に伝える。
     {
-        let shared = shared.clone();
+        let host_parameter_edit_notifier = host_parameter_edit_notifier.clone();
         command_handler.register_sync("end_parameter_gesture", move |_ctx| {
-            shared.end_gesture_from_ui();
+            host_parameter_edit_notifier.end_edit(PARAM_GAIN_ID);
             Ok::<_, String>(json!({ "ok": true }))
         });
     }
@@ -660,13 +628,13 @@ mod tests {
 
     use wrac_clap_adapter::{AudioPortConfigurationRequest, AudioPortType};
 
-    use super::{SharedStateInner, resolve_audio_channel_count};
+    use super::{SharedState, resolve_audio_channel_count};
 
     const fn assert_send_sync<T: Send + Sync>() {}
 
     #[test]
-    fn shared_state_inner_is_send_sync() {
-        assert_send_sync::<SharedStateInner>();
+    fn shared_state_is_send_sync() {
+        assert_send_sync::<SharedState>();
     }
 
     #[test]

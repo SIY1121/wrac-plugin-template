@@ -5,7 +5,7 @@
 //! (例: 512 sample) ごとに繰り返し呼び出される real-time な関数なので、
 //! ここでは allocation や lock を避けるのが原則。
 //!
-//! 共有 state (`SharedStateInner`) は `AtomicF32` などで lock-free に
+//! 共有 state (`SharedState`) は `AtomicF32` などで lock-free に
 //! 読めるようになっており、GUI thread が gain を更新しても audio 側が
 //! ブロックされない設計になっている。
 
@@ -16,18 +16,18 @@ use wrac_clap_adapter::{
     ProcessContext, ProcessStatus, Processor,
 };
 
-use crate::plugin::{PARAM_GAIN_ID, SharedStateInner};
+use crate::plugin::{PARAM_GAIN_ID, SharedState};
 
 /// `PluginCore::activate` で生成され、host の audio thread に所有される DSP 実体。
 ///
 /// 中身は共有 state への `Arc` だけ。`Processor` instance は host が
 /// `deactivate` するまで生き続け、その間に何度も `process` が呼ばれる。
 pub(crate) struct WxpExampleGainAudioProcessor {
-    shared: Arc<SharedStateInner>,
+    shared: Arc<SharedState>,
 }
 
 impl WxpExampleGainAudioProcessor {
-    pub(crate) fn new(shared: Arc<SharedStateInner>) -> Self {
+    pub(crate) fn new(shared: Arc<SharedState>) -> Self {
         Self { shared }
     }
 }
@@ -62,7 +62,8 @@ impl Processor for WxpExampleGainAudioProcessor {
             // 今回扱うのは gain の parameter event だけ。それ以外 (note 等) は無視。
             if let InputEvent::ParamValue(event) = event {
                 if event.parameter_id == PARAM_GAIN_ID {
-                    gain = self.shared.set_gain_from_automation(event.value);
+                    gain = self.shared.set_gain(event.value);
+                    self.shared.mark_gui_notification_pending();
                 }
             }
         }
