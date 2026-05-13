@@ -36,19 +36,11 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install GUI dependencies
-        working-directory: src-gui
-        run: npm ci
-
-      - name: Build GUI
-        working-directory: src-gui
-        run: npm run build
-
-      - name: Check Rust plugin
-        run: cargo check --locked --package wrac_gain_plugin
+      - name: Check workspace
+        run: cargo check --locked --workspace
 
       - name: Build CLAP bundle
-        run: ./script/build.sh Release
+        run: cargo xtask build --release --target=clap
 
       - name: Verify CLAP bundle
-        run: test -d "target/bundled/WRAC Gain.clap"
+        run: test -d "target/wrac/artifacts/release/WRAC Gain.clap"

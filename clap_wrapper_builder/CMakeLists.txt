@@ -19,6 +19,9 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # Receive the static library path as a cache variable
 set(CLAP_WRAPPER_BUILDER_TARGET_LIB "" CACHE FILEPATH "Path to the static library to wrap")
+set(CLAP_WRAPPER_BUILDER_TARGET_NAME "" CACHE STRING "Internal CMake target name for the wrapper")
+set(CLAP_WRAPPER_BUILDER_OUTPUT_NAME "" CACHE STRING "Output plugin display/bundle name")
+set(CLAP_WRAPPER_BUILDER_STAGE_DIR "" CACHE PATH "Directory where built artifacts are staged")
 option(CLAP_WRAPPER_BUILDER_BUILD_STANDALONE "Build standalone app target in clap_wrapper_builder" OFF)
 option(CLAP_WRAPPER_BUILDER_BUILD_VST3 "Build VST3 target in clap_wrapper_builder" ON)
 if(APPLE)
@@ -39,20 +42,27 @@ if(NOT CLAP_WRAPPER_BUILDER_TARGET_LIB)
     message(FATAL_ERROR "CLAP_WRAPPER_BUILDER_TARGET_LIB must be specified. Use: -DCLAP_WRAPPER_BUILDER_TARGET_LIB=/path/to/your/plugin.a")
 endif()
 
-if(NOT EXISTS ${CLAP_WRAPPER_BUILDER_TARGET_LIB})
+if(NOT EXISTS "${CLAP_WRAPPER_BUILDER_TARGET_LIB}")
     message(FATAL_ERROR "Static library not found: ${CLAP_WRAPPER_BUILDER_TARGET_LIB}")
 endif()
 
 # Derive plugin name from the static library filename
-get_filename_component(PLUGIN_NAME ${CLAP_WRAPPER_BUILDER_TARGET_LIB} NAME_WE)
-string(REGEX REPLACE "^lib" "" PLUGIN_NAME ${PLUGIN_NAME})
-string(REGEX REPLACE "[^A-Za-z0-9_]" "_" PLUGIN_NAME_SAFE ${PLUGIN_NAME})
+get_filename_component(PLUGIN_NAME "${CLAP_WRAPPER_BUILDER_TARGET_LIB}" NAME_WE)
+string(REGEX REPLACE "^lib" "" PLUGIN_NAME "${PLUGIN_NAME}")
+if(CLAP_WRAPPER_BUILDER_OUTPUT_NAME)
+    set(PLUGIN_NAME "${CLAP_WRAPPER_BUILDER_OUTPUT_NAME}")
+endif()
+string(REGEX REPLACE "[^A-Za-z0-9_]" "_" PLUGIN_NAME_SAFE "${PLUGIN_NAME}")
 string(REPLACE "_" "-" PLUGIN_NAME_BUNDLE ${PLUGIN_NAME_SAFE})
+if(CLAP_WRAPPER_BUILDER_TARGET_NAME)
+    string(REGEX REPLACE "[^A-Za-z0-9_]" "_" PLUGIN_NAME_SAFE "${CLAP_WRAPPER_BUILDER_TARGET_NAME}")
+endif()
 
 message(STATUS "CLAP Wrapper Builder Configuration:")
 message(STATUS "  Target Library: ${CLAP_WRAPPER_BUILDER_TARGET_LIB}")
 message(STATUS "  Plugin Name: ${PLUGIN_NAME}")
 message(STATUS "  Safe Plugin Name: ${PLUGIN_NAME_SAFE}")
+message(STATUS "  Stage Dir: ${CLAP_WRAPPER_BUILDER_STAGE_DIR}")
 message(STATUS "  Build AAX: ${CLAP_WRAPPER_BUILDER_BUILD_AAX}")
 
 # Add the clap-wrapper subproject
@@ -68,14 +78,14 @@ add_library(${PLUGIN_NAME_SAFE}_impl STATIC IMPORTED)
 
 if(MSVC)
   set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
-      IMPORTED_LOCATION ${CLAP_WRAPPER_BUILDER_TARGET_LIB}
+      IMPORTED_LOCATION "${CLAP_WRAPPER_BUILDER_TARGET_LIB}"
       INTERFACE_LINK_LIBRARIES "ntdll.lib;ws2_32.lib;userenv.lib"
   )
 endif()
 
 if(APPLE)
   set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
-      IMPORTED_LOCATION ${CLAP_WRAPPER_BUILDER_TARGET_LIB}
+      IMPORTED_LOCATION "${CLAP_WRAPPER_BUILDER_TARGET_LIB}"
       INTERFACE_LINK_LIBRARIES "-framework AppKit;-framework Foundation"
   )
 endif()
@@ -193,3 +203,51 @@ target_include_directories(${PLUGIN_NAME_SAFE}_clap
   PRIVATE
   ${CLAP_SDK_ROOT}/include
 )
+
+if(CLAP_WRAPPER_BUILDER_STAGE_DIR)
+    file(MAKE_DIRECTORY "${CLAP_WRAPPER_BUILDER_STAGE_DIR}")
+
+    # Stage artifacts to xtask's fixed output paths. xtask deliberately avoids
+    # finding outputs from generator-specific directories after the build.
+    if(TARGET ${PLUGIN_NAME_SAFE}_vst3)
+        if(APPLE)
+            add_custom_command(TARGET ${PLUGIN_NAME_SAFE}_vst3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E rm -rf "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.vst3"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:${PLUGIN_NAME_SAFE}_vst3>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.vst3"
+                VERBATIM
+            )
+        else()
+            add_custom_command(TARGET ${PLUGIN_NAME_SAFE}_vst3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PLUGIN_NAME_SAFE}_vst3>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.vst3"
+                VERBATIM
+            )
+        endif()
+    endif()
+
+    if(APPLE AND TARGET ${PLUGIN_NAME_SAFE}_auv2)
+        set(AUV2_GENERATED_PLIST "${CMAKE_CURRENT_BINARY_DIR}/${PLUGIN_NAME_SAFE}_auv2-build-helper-output/auv2_Info.plist")
+        # clap-wrapper's AUv2 helper generates the AudioComponents metadata that
+        # auval needs; copy it back before staging/signing the component bundle.
+        add_custom_command(TARGET ${PLUGIN_NAME_SAFE}_auv2 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${AUV2_GENERATED_PLIST}" "$<TARGET_BUNDLE_DIR:${PLUGIN_NAME_SAFE}_auv2>/Contents/Info.plist"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.component"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:${PLUGIN_NAME_SAFE}_auv2>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.component"
+            VERBATIM
+        )
+    endif()
+
+    if(TARGET ${PLUGIN_NAME_SAFE}_standalone)
+        if(APPLE)
+            add_custom_command(TARGET ${PLUGIN_NAME_SAFE}_standalone POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E rm -rf "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${CLAP_WRAPPER_BUILDER_STANDALONE_OUTPUT_NAME}.app"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:${PLUGIN_NAME_SAFE}_standalone>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${CLAP_WRAPPER_BUILDER_STANDALONE_OUTPUT_NAME}.app"
+                VERBATIM
+            )
+        elseif(WIN32)
+            add_custom_command(TARGET ${PLUGIN_NAME_SAFE}_standalone POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PLUGIN_NAME_SAFE}_standalone>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${CLAP_WRAPPER_BUILDER_STANDALONE_OUTPUT_NAME}.exe"
+                VERBATIM
+            )
+        endif()
+    endif()
+endif()
