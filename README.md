@@ -38,9 +38,20 @@ It is also structured so it can be used as a template.
 cargo xtask build
 cargo xtask build --release
 cargo xtask build --validate
+cargo xtask build --target=vst3
+cargo xtask build --target=au,standalone
+cargo xtask install
 ```
 
-On macOS, `--validate` runs the VST3 validator and `auval -v aufx WtGn YrCo`.
+`cargo xtask build` builds every target supported by the current OS:
+CLAP/VST3/AU/standalone on macOS, CLAP/VST3/standalone on Windows, and CLAP on
+Linux. Use `build --target` with a comma-separated list of `clap`, `vst3`,
+`au`, and `standalone` to build a smaller set. `install` and `uninstall` accept
+plugin formats only: `clap`, `vst3`, and `au`.
+
+Artifacts are staged under `target/wrac/artifacts/<profile>/`, and standalone
+apps are staged under `target/wrac/standalone/<profile>/`. On macOS, `--validate`
+runs the VST3 validator and `auval -v aufx WtGn YrCo`.
 
 
 ## Setting Up a New Project

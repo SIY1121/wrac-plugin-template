@@ -1,28 +1,34 @@
 # clap_wrapper_builder
 
-`clap_wrapper_builder` is a helper build environment for wrapping a CLAP plugin
-from the `wrac-plugin-template` reference implementation into VST3 / AUv2 / AAX / Standalone.
+`clap_wrapper_builder` is a helper CMake build environment for wrapping a CLAP
+plugin static library into VST3 / AUv2 / AAX / Standalone.
 
-This is not a stable public API. Treat it as example code that supports sample
-implementations such as the root gain plugin — breaking changes may be introduced.
+The dependency SDKs are normally checked out as git submodules under this
+directory. Repository-local product builds are driven by `cargo xtask`; this
+directory intentionally keeps the reusable CMake wrapper definition for other
+products.
 
 ## Contents
 
-- `build_wrapper_plugin.sh` - Build a VST3 / AUv2 / AAX wrapper from a CLAP bundle
-- `build_wrapper_plugin_static.sh` - Build VST3 / AUv2 / AAX / Standalone from a static library
-- `install_wrapper_plugin.sh` - Install the generated VST3
+- `CMakeLists.txt` - Static-library based wrapper build definition
 - `clap-wrapper` / `clap` / `vst3sdk` / `AudioUnitSDK` - Dependency SDKs / toolchain
+
+## Usage
+
+The main template build uses:
+
+```bash
+cargo xtask build
+cargo xtask build --target=standalone
+```
+
+Other products can call this CMake project directly and pass
+`CLAP_WRAPPER_BUILDER_TARGET_LIB`, `CLAP_WRAPPER_BUILDER_OUTPUT_NAME`, and
+`CLAP_WRAPPER_BUILDER_STAGE_DIR`.
 
 ## AAX
 
-Set `CLAP_WRAPPER_BUILDER_BUILD_AAX=ON` to enable AAX in the wrapper scripts.
-When the SDK is already available locally, pass it via `CLAP_WRAPPER_BUILDER_AAX_SDK_ROOT`
-or `AAX_SDK_ROOT`. To download the public slim SDK automatically through `clap-wrapper`,
-set `CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=ON`.
-
-## Intended use
-
-- Distribute the reference plugin of `wrac-plugin-template` in multiple formats
-- Use as a reference implementation from other projects such as `xdevice-private`
-
-This is not treated as a long-term stable public interface; the configuration and scripts may be revised as needed.
+AAX support remains available in CMake for products that need it, but the WRAC
+Gain `cargo xtask` build disables AAX. AAX requires the Avid SDK. Point
+`AAX_SDK_ROOT` at a local SDK checkout, or enable dependency download when that
+is acceptable for your environment.

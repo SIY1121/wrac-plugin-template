@@ -22,7 +22,6 @@ To generate VST3 / AU / Standalone using clap-wrapper, the following are additio
 **Windows:**
 - Visual Studio 2022 (with C++ build tools)
 - CMake (3.15 or later recommended)
-- Git Bash. The scripts under `./script/` are Bash scripts and are intended to be run from Git Bash on Windows.
 
 **Linux:**
 - CLAP only is supported at this time.
@@ -87,10 +86,8 @@ Run the following from the repository root.
 
 ```sh
 cd /path/to/my_plugin
-./script/build_and_install.sh
+cargo xtask build --install
 ```
-
-On Windows, run the script from Git Bash rather than PowerShell or Command Prompt.
 
 The built plugin will be installed to the following directories:
 
@@ -100,7 +97,9 @@ The built plugin will be installed to the following directories:
 | Windows | `%LOCALAPPDATA%/Programs/Common/CLAP/` |
 | Linux | `~/.clap/` |
 
-VST3 / AU are installed at the same time.
+VST3 / AU / standalone are built where supported by the current OS. Standalone
+apps do not have a plugin install destination, so xtask prints their artifact
+path instead.
 
 ### 4. Verify
 
