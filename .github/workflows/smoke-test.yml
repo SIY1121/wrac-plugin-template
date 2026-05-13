@@ -45,7 +45,7 @@ jobs:
         run: npm run build
 
       - name: Check Rust plugin
-        run: cargo check --locked --manifest-path src-plugin/Cargo.toml
+        run: cargo check --locked --package wxp_example_gain_plugin
 
       - name: Build CLAP bundle
         run: ./script/build.sh Release
