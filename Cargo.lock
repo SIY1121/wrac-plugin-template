@@ -3306,6 +3306,8 @@ version = "0.1.0"
 dependencies = [
  "assert_no_alloc",
  "atomic_float",
+ "libc",
+ "log",
  "novonotes_run_loop",
  "parking_lot",
  "run_loop_timer",
