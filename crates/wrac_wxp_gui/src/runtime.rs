@@ -97,65 +97,92 @@ pub(crate) struct GuiRuntimeHandle {
 pub(crate) fn create_gui_runtime_handle(
     create: impl FnOnce() -> PluginResult<Box<dyn WxpGuiRuntime>>,
 ) -> PluginResult<GuiRuntimeHandle> {
+    log::debug!("wxp runtime: acquiring GUI thread lease");
     let lease = GuiThreadLease::acquire()?;
     // `create` が失敗した場合、lease はここで drop される。失敗した runtime 作成が
     // GUI thread ref を残さないことを型の drop 順で保証する。
     match create() {
-        Ok(runtime) => Ok(insert_gui_runtime(runtime, lease)),
-        Err(error) => Err(error),
+        Ok(runtime) => {
+            log::debug!("wxp runtime: factory returned runtime");
+            Ok(insert_gui_runtime(runtime, lease))
+        }
+        Err(error) => {
+            log::warn!("wxp runtime: factory failed: {error:?}");
+            Err(error)
+        }
     }
 }
 
 impl GuiRuntimeHandle {
     pub(crate) fn destroy(self) {
         let id = self.id;
+        log::debug!("wxp runtime {id}: destroy requested");
         self.sender.send_and_wait(move || {
+            log::debug!("wxp runtime {id}: removing runtime from GUI thread");
             GUI_RUNTIMES.with(|runtimes| {
                 runtimes.borrow_mut().remove(&id);
             });
+            log::debug!("wxp runtime {id}: removed runtime from GUI thread");
         });
+        log::debug!("wxp runtime {id}: destroy completed");
     }
 
     pub(crate) fn set_scale(&self, scale: f64) -> PluginResult<()> {
         let id = self.id;
+        log::debug!("wxp runtime {id}: set_scale requested: scale={scale}");
         self.sender.send_and_wait(move || {
             GUI_RUNTIMES.with(|runtimes| {
                 let mut runtimes = runtimes.borrow_mut();
                 let entry = runtimes.get_mut(&id).ok_or(PluginError::InvalidState)?;
-                entry.runtime.set_scale(scale)
+                let result = entry.runtime.set_scale(scale);
+                log::debug!("wxp runtime {id}: set_scale completed: result={result:?}");
+                result
             })
         })
     }
 
     pub(crate) fn set_size(&self, size: GuiSize) -> PluginResult<()> {
         let id = self.id;
+        log::debug!(
+            "wxp runtime {id}: set_size requested: width={}, height={}",
+            size.width,
+            size.height
+        );
         self.sender.send_and_wait(move || {
             GUI_RUNTIMES.with(|runtimes| {
                 let mut runtimes = runtimes.borrow_mut();
                 let entry = runtimes.get_mut(&id).ok_or(PluginError::InvalidState)?;
-                entry.runtime.set_size(size)
+                let result = entry.runtime.set_size(size);
+                log::debug!("wxp runtime {id}: set_size completed: result={result:?}");
+                result
             })
         })
     }
 
     pub(crate) fn show(&self) -> PluginResult<()> {
         let id = self.id;
+        log::debug!("wxp runtime {id}: show requested");
         self.sender.send_and_wait(move || {
             GUI_RUNTIMES.with(|runtimes| {
                 let mut runtimes = runtimes.borrow_mut();
                 let entry = runtimes.get_mut(&id).ok_or(PluginError::InvalidState)?;
-                entry.runtime.show()
+                let result = entry.runtime.show();
+                log::debug!("wxp runtime {id}: show completed: result={result:?}");
+                result
             })
         })
     }
 
     pub(crate) fn hide(&self) -> PluginResult<()> {
         let id = self.id;
+        log::debug!("wxp runtime {id}: hide requested");
         self.sender.send_and_wait(move || {
             GUI_RUNTIMES.with(|runtimes| {
                 let mut runtimes = runtimes.borrow_mut();
                 let entry = runtimes.get_mut(&id).ok_or(PluginError::InvalidState)?;
-                entry.runtime.hide()
+                let result = entry.runtime.hide();
+                log::debug!("wxp runtime {id}: hide completed: result={result:?}");
+                result
             })
         })
     }
@@ -163,6 +190,7 @@ impl GuiRuntimeHandle {
 
 fn insert_gui_runtime(runtime: Box<dyn WxpGuiRuntime>, lease: GuiThreadLease) -> GuiRuntimeHandle {
     let id = NEXT_GUI_ID.fetch_add(1, Ordering::Relaxed);
+    log::debug!("wxp runtime {id}: inserting runtime on GUI thread");
     GUI_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().insert(
             id,
@@ -172,6 +200,7 @@ fn insert_gui_runtime(runtime: Box<dyn WxpGuiRuntime>, lease: GuiThreadLease) ->
             },
         );
     });
+    log::debug!("wxp runtime {id}: inserted runtime on GUI thread");
     GuiRuntimeHandle {
         id,
         sender: RunLoop::sender(),
@@ -181,15 +210,20 @@ fn insert_gui_runtime(runtime: Box<dyn WxpGuiRuntime>, lease: GuiThreadLease) ->
 impl GuiThreadLease {
     pub(crate) fn acquire() -> PluginResult<Self> {
         let current_thread = std::thread::current().id();
+        log::debug!("wxp GUI thread lease: acquire requested on thread {current_thread:?}");
         let mut gui_thread = GUI_THREAD_STATE.lock();
         match gui_thread.owner {
             Some(owner_thread) if owner_thread != current_thread => {
+                log::debug!(
+                    "wxp GUI thread lease: rejecting thread {current_thread:?}; owner is {owner_thread:?}"
+                );
                 return Err(PluginError::UnsupportedHostGuiThreadingModel);
             }
             Some(_) | None => {}
         }
 
         if RunLoop::init().is_err() {
+            log::debug!("wxp GUI thread lease: RunLoop::init failed");
             return Err(PluginError::UnsupportedHostGuiThreadingModel);
         }
 
@@ -197,20 +231,31 @@ impl GuiThreadLease {
         // 完全 rollback する保証はまだないため、少なくともこちらの SoT は汚さない。
         gui_thread.owner = Some(current_thread);
         gui_thread.ref_count += 1;
+        log::debug!(
+            "wxp GUI thread lease: acquired on thread {current_thread:?}; ref_count={}",
+            gui_thread.ref_count
+        );
         Ok(Self)
     }
 }
 
 impl Drop for GuiThreadLease {
     fn drop(&mut self) {
+        let current_thread = std::thread::current().id();
+        log::debug!("wxp GUI thread lease: dropping on thread {current_thread:?}");
         RunLoop::deinit();
         let mut gui_thread = GUI_THREAD_STATE.lock();
         debug_assert!(gui_thread.ref_count > 0);
         gui_thread.ref_count = gui_thread.ref_count.saturating_sub(1);
+        log::debug!(
+            "wxp GUI thread lease: dropped on thread {current_thread:?}; ref_count={}",
+            gui_thread.ref_count
+        );
         if gui_thread.ref_count == 0 {
             // 最後の runtime だけでなく `set_parent()` 由来の thread 固定も解放された時点で、
             // 次の GUI session が別 host window から来ることを許可する。
             gui_thread.owner = None;
+            log::debug!("wxp GUI thread lease: owner cleared");
         }
     }
 }

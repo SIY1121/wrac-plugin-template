@@ -3334,6 +3334,7 @@ dependencies = [
 name = "wrac_wxp_gui"
 version = "0.1.0"
 dependencies = [
+ "log",
  "novonotes_run_loop",
  "parking_lot",
  "raw-window-handle",
