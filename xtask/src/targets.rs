@@ -101,10 +101,12 @@ impl Platform {
         }
     }
 
+    pub(crate) fn supports_vst3(self) -> bool {
+        matches!(self, Self::Macos | Self::Windows | Self::Linux)
+    }
+
     pub(crate) fn supports_wrappers(self) -> bool {
-        // Linux は現状 CLAP のみを配布対象にしている。
-        // clap-wrapper 自体の可能性ではなく、この template が保証する build surface を返す。
-        matches!(self, Self::Macos | Self::Windows)
+        self.supports_vst3() || self.supports_au()
     }
 
     pub(crate) fn supports_au(self) -> bool {
@@ -114,7 +116,7 @@ impl Platform {
     pub(crate) fn supports_target(self, target: Target) -> bool {
         match target {
             Target::Clap => true,
-            Target::Vst3 => self.supports_wrappers(),
+            Target::Vst3 => self.supports_vst3(),
             Target::Au => self.supports_au(),
             Target::Standalone => matches!(self, Self::Macos | Self::Windows),
         }
@@ -122,11 +124,10 @@ impl Platform {
 
     pub(crate) fn default_build_targets(self) -> Vec<Target> {
         // 無指定 build は「その OS で開発者が期待する全部」を作る。
-        // Linux で wrapper を既定に含めないのは、未対応 target の長い CMake 失敗を避けるため。
         match self {
             Self::Macos => vec![Target::Clap, Target::Vst3, Target::Au, Target::Standalone],
             Self::Windows => vec![Target::Clap, Target::Vst3, Target::Standalone],
-            Self::Linux => vec![Target::Clap],
+            Self::Linux => vec![Target::Clap, Target::Vst3],
         }
     }
 
@@ -134,7 +135,7 @@ impl Platform {
         match self {
             Self::Macos => vec![PluginTarget::Clap, PluginTarget::Vst3, PluginTarget::Au],
             Self::Windows => vec![PluginTarget::Clap, PluginTarget::Vst3],
-            Self::Linux => vec![PluginTarget::Clap],
+            Self::Linux => vec![PluginTarget::Clap, PluginTarget::Vst3],
         }
     }
 
@@ -144,7 +145,7 @@ impl Platform {
         match self {
             Self::Macos => vec![ValidateTarget::Vst3, ValidateTarget::Au],
             Self::Windows => vec![ValidateTarget::Vst3],
-            Self::Linux => Vec::new(),
+            Self::Linux => vec![ValidateTarget::Vst3],
         }
     }
 

@@ -5,6 +5,7 @@ project(clap_wrapper_builder)
 # Require C++23 or later (required by clap-wrapper and AudioUnitSDK)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET} AND NOT "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "$ENV{MACOSX_DEPLOYMENT_TARGET}")
@@ -76,10 +77,12 @@ endif()
 # Create the static library target
 # Set up the external static library as an imported library
 add_library(${PLUGIN_NAME_SAFE}_impl STATIC IMPORTED)
+set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
+    IMPORTED_LOCATION "${CLAP_WRAPPER_BUILDER_TARGET_LIB}"
+)
 
 if(MSVC)
   set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
-      IMPORTED_LOCATION "${CLAP_WRAPPER_BUILDER_TARGET_LIB}"
       # Rust staticlibs do not carry native system-library dependencies into
       # the final wrapper link, so keep the common Windows runtime deps explicit.
       INTERFACE_LINK_LIBRARIES "ntdll.lib;ws2_32.lib;userenv.lib;bcrypt.lib;runtimeobject.lib;psapi.lib"
@@ -88,8 +91,15 @@ endif()
 
 if(APPLE)
   set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
-      IMPORTED_LOCATION "${CLAP_WRAPPER_BUILDER_TARGET_LIB}"
       INTERFACE_LINK_LIBRARIES "-framework AppKit;-framework Foundation;-framework WebKit"
+  )
+endif()
+
+if(UNIX AND NOT APPLE)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LINUX_PLUGIN_DEPS REQUIRED IMPORTED_TARGET webkit2gtk-4.1 gtk+-3.0 gdk-x11-3.0)
+  set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
+      INTERFACE_LINK_LIBRARIES PkgConfig::LINUX_PLUGIN_DEPS
   )
 endif()
 # Generate the source file for the CLAP entry point.
@@ -227,7 +237,8 @@ if(CLAP_WRAPPER_BUILDER_STAGE_DIR)
             )
         else()
             add_custom_command(TARGET ${PLUGIN_NAME_SAFE}_vst3 POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PLUGIN_NAME_SAFE}_vst3>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.vst3"
+                COMMAND ${CMAKE_COMMAND} -E rm -rf "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.vst3"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:${PLUGIN_NAME_SAFE}_vst3>/../.." "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PLUGIN_NAME}.vst3"
                 VERBATIM
             )
         endif()

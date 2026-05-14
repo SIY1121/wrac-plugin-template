@@ -42,6 +42,9 @@ jobs:
     name: Rust lint and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
+    # Keep clippy and tests in one per-OS job so both checks share the same
+    # checkout and compiled dependency graph. Splitting them would make the CI
+    # shape look cleaner, but would duplicate setup and much of the Rust build.
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +61,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtkmm-3.0-dev
 
       - name: Show Rust version
         run: |
@@ -73,7 +76,7 @@ jobs:
         run: cargo test --locked --workspace
 
   plugin-build:
-    name: Build plugin artifacts (${{ matrix.os }})
+    name: Plugin artifact validation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs:
       - rust-format
@@ -84,10 +87,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            targets: clap
-            validate-targets: ""
+            targets: clap,vst3
+            validate-targets: vst3
             verify: |
               test -f "target/wrac/plugins/release/WRAC Gain.clap"
+              test -d "target/wrac/plugins/release/WRAC Gain.vst3"
           - os: windows-latest
             targets: clap,vst3,standalone
             validate-targets: vst3
@@ -114,7 +118,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtkmm-3.0-dev
 
       - name: Add msbuild to PATH
         if: runner.os == 'Windows'

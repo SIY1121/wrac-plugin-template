@@ -528,11 +528,15 @@ fn install_dir(ctx: &Context, scope: InstallScope, format: PluginFormat) -> Resu
             return Err("AU is not supported on Windows".into());
         }
         (Platform::Linux, InstallScope::User, PluginFormat::Clap) => home_dir()?.join(".clap"),
+        (Platform::Linux, InstallScope::User, PluginFormat::Vst3) => home_dir()?.join(".vst3"),
         (Platform::Linux, InstallScope::System, PluginFormat::Clap) => {
             PathBuf::from("/usr/lib/clap")
         }
-        (Platform::Linux, _, PluginFormat::Vst3 | PluginFormat::Au) => {
-            return Err("VST3/AU install is not supported on Linux".into());
+        (Platform::Linux, InstallScope::System, PluginFormat::Vst3) => {
+            PathBuf::from("/usr/lib/vst3")
+        }
+        (Platform::Linux, _, PluginFormat::Au) => {
+            return Err("AU is not supported on Linux".into());
         }
     };
     Ok(dir)
@@ -646,15 +650,15 @@ fn ensure_vst3_validator(ctx: &Context) -> Result<PathBuf> {
     } else {
         "validator"
     };
-    let validator = ctx
-        .target_dir
-        .join("vst3sdk-validator")
-        .join("bin")
-        .join("Debug")
-        .join(executable);
+    let validator_bin_dir = ctx.target_dir.join("vst3sdk-validator").join("bin");
+    let validator = validator_bin_dir.join("Debug").join(executable);
+    let validator_without_config = validator_bin_dir.join(executable);
 
     if validator.exists() {
         return Ok(validator);
+    }
+    if validator_without_config.exists() {
+        return Ok(validator_without_config);
     }
 
     // validator は出荷 artifact ではなく検証用 tool。
@@ -683,8 +687,12 @@ fn ensure_vst3_validator(ctx: &Context) -> Result<PathBuf> {
         .arg("Debug")
         .current_dir(&ctx.root))?;
 
-    ensure_exists(&validator, "VST3 validator")?;
-    Ok(validator)
+    if validator.exists() {
+        Ok(validator)
+    } else {
+        ensure_exists(&validator_without_config, "VST3 validator")?;
+        Ok(validator_without_config)
+    }
 }
 
 pub(crate) fn clean(ctx: &Context) -> Result<()> {
