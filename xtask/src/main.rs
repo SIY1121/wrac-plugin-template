@@ -23,9 +23,12 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Build(args) => build(&ctx, args)?,
-        Commands::Install(args) => {
-            install(&ctx, BuildProfile::from_release(args.release), &args.target)?
-        }
+        Commands::Install(args) => install(
+            &ctx,
+            BuildProfile::from_release(args.release),
+            args.scope,
+            &args.target,
+        )?,
         Commands::Uninstall(args) => uninstall(&ctx, &args.target, args.dry_run)?,
         Commands::Validate(args) => {
             validate(&ctx, BuildProfile::from_release(args.release), &args.target)?

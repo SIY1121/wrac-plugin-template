@@ -97,6 +97,11 @@ cargo xtask build --install
 | Windows | `%LOCALAPPDATA%/Programs/Common/CLAP/` および `%LOCALAPPDATA%/Programs/Common/VST3/` |
 | Linux | `~/.clap/` |
 
+Windows では `cargo xtask install` は既定で user-local のパスにインストールします。
+system-wide のみをスキャンするホスト向けには `cargo xtask install --scope=system`
+を使うと `%COMMONPROGRAMFILES%/CLAP/` および `%COMMONPROGRAMFILES%/VST3/` に
+インストールできます。`cargo xtask uninstall` は user-local と system-wide の両方を削除します。
+
 VST3 / AU / standalone は現在の OS で対応している場合に同時にビルドされます。
 スタンドアローンアプリには plugin install 先がないため、xtask は artifact path を表示します。
 

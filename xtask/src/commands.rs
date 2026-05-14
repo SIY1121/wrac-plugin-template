@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::Result;
-use crate::cli::BuildArgs;
+use crate::cli::{BuildArgs, InstallScope};
 use crate::constants::{
     AU_BUNDLE_NAME, AU_MANUFACTURER, AU_MANUFACTURER_NAME, AU_SUBTYPE, AU_TYPE, CLAP_BUNDLE_NAME,
     CRATE_NAME, PLUGIN_ID, PLUGIN_NAME, STANDALONE_NAME, VST3_BUNDLE_NAME,
@@ -15,7 +15,8 @@ use crate::targets::{
     resolve_validate_targets,
 };
 use crate::util::{
-    copy_path, ensure_exists, env_value_or, home_dir, local_app_data, on_off, remove_if_exists, run,
+    common_program_files, copy_path, ensure_exists, env_value_or, home_dir, local_app_data, on_off,
+    remove_if_exists, run,
 };
 
 pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
@@ -305,10 +306,11 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
 pub(crate) fn install(
     ctx: &Context,
     profile: BuildProfile,
+    scope: InstallScope,
     requested: &[PluginTarget],
 ) -> Result<()> {
     let targets = resolve_plugin_targets(ctx.platform, requested)?;
-    install_plugin_targets(ctx, profile, &targets)
+    install_plugin_targets(ctx, profile, scope, &targets)
 }
 
 fn install_built_targets(ctx: &Context, profile: BuildProfile, targets: &[Target]) -> Result<()> {
@@ -322,27 +324,28 @@ fn install_built_targets(ctx: &Context, profile: BuildProfile, targets: &[Target
         println!("No plugin targets to install.");
         return Ok(());
     }
-    install_plugin_targets(ctx, profile, &targets)
+    install_plugin_targets(ctx, profile, InstallScope::User, &targets)
 }
 
 fn install_plugin_targets(
     ctx: &Context,
     profile: BuildProfile,
+    scope: InstallScope,
     targets: &[PluginTarget],
 ) -> Result<()> {
     for target in targets {
         match target {
             PluginTarget::Clap => install_artifact(
                 &ctx.clap_bundle(profile),
-                &install_dir(ctx, PluginFormat::Clap)?,
+                &install_dir(ctx, scope, PluginFormat::Clap)?,
             )?,
             PluginTarget::Vst3 => install_artifact(
                 &ctx.vst3_bundle(profile),
-                &install_dir(ctx, PluginFormat::Vst3)?,
+                &install_dir(ctx, scope, PluginFormat::Vst3)?,
             )?,
             PluginTarget::Au => install_artifact(
                 &ctx.au_bundle(profile),
-                &install_dir(ctx, PluginFormat::Au)?,
+                &install_dir(ctx, scope, PluginFormat::Au)?,
             )?,
         }
     }
@@ -355,21 +358,21 @@ pub(crate) fn uninstall(ctx: &Context, requested: &[PluginTarget], dry_run: bool
     let mut removed = 0usize;
     let mut missing = 0usize;
     for target in targets {
-        let path = installed_artifact(ctx, target)?;
+        for path in installed_artifacts(ctx, target)? {
+            if !path.exists() {
+                println!("Not found: {}", path.display());
+                missing += 1;
+                continue;
+            }
 
-        if !path.exists() {
-            println!("Not found: {}", path.display());
-            missing += 1;
-            continue;
+            if dry_run {
+                println!("Would remove: {}", path.display());
+            } else {
+                println!("Removing: {}", path.display());
+                remove_if_exists(&path)?;
+            }
+            removed += 1;
         }
-
-        if dry_run {
-            println!("Would remove: {}", path.display());
-        } else {
-            println!("Removing: {}", path.display());
-            remove_if_exists(&path)?;
-        }
-        removed += 1;
     }
 
     if dry_run {
@@ -387,26 +390,48 @@ enum PluginFormat {
     Au,
 }
 
-fn install_dir(ctx: &Context, format: PluginFormat) -> Result<PathBuf> {
-    let dir = match (ctx.platform, format) {
-        (Platform::Macos, PluginFormat::Clap) => home_dir()?.join("Library/Audio/Plug-Ins/CLAP"),
-        (Platform::Macos, PluginFormat::Vst3) => home_dir()?.join("Library/Audio/Plug-Ins/VST3"),
-        (Platform::Macos, PluginFormat::Au) => {
+fn install_dir(ctx: &Context, scope: InstallScope, format: PluginFormat) -> Result<PathBuf> {
+    let dir = match (ctx.platform, scope, format) {
+        (Platform::Macos, InstallScope::User, PluginFormat::Clap) => {
+            home_dir()?.join("Library/Audio/Plug-Ins/CLAP")
+        }
+        (Platform::Macos, InstallScope::User, PluginFormat::Vst3) => {
+            home_dir()?.join("Library/Audio/Plug-Ins/VST3")
+        }
+        (Platform::Macos, InstallScope::User, PluginFormat::Au) => {
             home_dir()?.join("Library/Audio/Plug-Ins/Components")
         }
-        (Platform::Windows, PluginFormat::Clap) => local_app_data()?
+        (Platform::Macos, InstallScope::System, PluginFormat::Clap) => {
+            PathBuf::from("/Library/Audio/Plug-Ins/CLAP")
+        }
+        (Platform::Macos, InstallScope::System, PluginFormat::Vst3) => {
+            PathBuf::from("/Library/Audio/Plug-Ins/VST3")
+        }
+        (Platform::Macos, InstallScope::System, PluginFormat::Au) => {
+            PathBuf::from("/Library/Audio/Plug-Ins/Components")
+        }
+        (Platform::Windows, InstallScope::User, PluginFormat::Clap) => local_app_data()?
             .join("Programs")
             .join("Common")
             .join("CLAP"),
-        (Platform::Windows, PluginFormat::Vst3) => local_app_data()?
+        (Platform::Windows, InstallScope::User, PluginFormat::Vst3) => local_app_data()?
             .join("Programs")
             .join("Common")
             .join("VST3"),
-        (Platform::Windows, PluginFormat::Au) => {
+        (Platform::Windows, InstallScope::System, PluginFormat::Clap) => {
+            common_program_files()?.join("CLAP")
+        }
+        (Platform::Windows, InstallScope::System, PluginFormat::Vst3) => {
+            common_program_files()?.join("VST3")
+        }
+        (Platform::Windows, _, PluginFormat::Au) => {
             return Err("AU is not supported on Windows".into());
         }
-        (Platform::Linux, PluginFormat::Clap) => home_dir()?.join(".clap"),
-        (Platform::Linux, PluginFormat::Vst3 | PluginFormat::Au) => {
+        (Platform::Linux, InstallScope::User, PluginFormat::Clap) => home_dir()?.join(".clap"),
+        (Platform::Linux, InstallScope::System, PluginFormat::Clap) => {
+            PathBuf::from("/usr/lib/clap")
+        }
+        (Platform::Linux, _, PluginFormat::Vst3 | PluginFormat::Au) => {
             return Err("VST3/AU install is not supported on Linux".into());
         }
     };
@@ -429,13 +454,21 @@ fn install_artifact(artifact: &Path, destination_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn installed_artifact(ctx: &Context, target: PluginTarget) -> Result<PathBuf> {
-    let path = match target {
-        PluginTarget::Clap => install_dir(ctx, PluginFormat::Clap)?.join(CLAP_BUNDLE_NAME),
-        PluginTarget::Vst3 => install_dir(ctx, PluginFormat::Vst3)?.join(VST3_BUNDLE_NAME),
-        PluginTarget::Au => install_dir(ctx, PluginFormat::Au)?.join(AU_BUNDLE_NAME),
+fn installed_artifacts(ctx: &Context, target: PluginTarget) -> Result<Vec<PathBuf>> {
+    let format = match target {
+        PluginTarget::Clap => PluginFormat::Clap,
+        PluginTarget::Vst3 => PluginFormat::Vst3,
+        PluginTarget::Au => PluginFormat::Au,
     };
-    Ok(path)
+    let bundle_name = match target {
+        PluginTarget::Clap => CLAP_BUNDLE_NAME,
+        PluginTarget::Vst3 => VST3_BUNDLE_NAME,
+        PluginTarget::Au => AU_BUNDLE_NAME,
+    };
+    Ok([InstallScope::User, InstallScope::System]
+        .into_iter()
+        .map(|scope| install_dir(ctx, scope, format).map(|dir| dir.join(bundle_name)))
+        .collect::<Result<Vec<_>>>()?)
 }
 
 pub(crate) fn validate(
@@ -476,7 +509,7 @@ fn validate_targets(
 
         // auval は path 指定ではなく AudioComponentRegistrar から対象を解決する。
         // そのため freshly built な AU を user-local に置いてから validation する。
-        let install_dir = install_dir(ctx, PluginFormat::Au)?;
+        let install_dir = install_dir(ctx, InstallScope::User, PluginFormat::Au)?;
         install_artifact(&au, &install_dir)?;
 
         // registrar は component 情報を cache するため、直前に置いた AU を見せるには再起動が必要。

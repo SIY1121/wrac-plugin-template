@@ -70,6 +70,11 @@ unsafe extern "C" fn state_load(plugin: *const clap_plugin, stream: *const clap_
         let Some(state_support) = core.state() else {
             return false;
         };
-        state_support.restore_state(PluginState { bytes }).is_ok()
+        if state_support.restore_state(PluginState { bytes }).is_err() {
+            return false;
+        }
+        drop(core);
+        instance.parameter_edits.rescan_values();
+        true
     })
 }

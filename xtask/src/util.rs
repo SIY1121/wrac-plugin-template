@@ -96,6 +96,12 @@ pub(crate) fn local_app_data() -> Result<PathBuf> {
         .ok_or_else(|| "LOCALAPPDATA is not set".into())
 }
 
+pub(crate) fn common_program_files() -> Result<PathBuf> {
+    env::var_os("CommonProgramFiles")
+        .map(PathBuf::from)
+        .ok_or_else(|| "CommonProgramFiles is not set".into())
+}
+
 pub(crate) fn env_value_or(name: &str, fallback: &str) -> String {
     env::var(name).unwrap_or_else(|_| fallback.to_owned())
 }

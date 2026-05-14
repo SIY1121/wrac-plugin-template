@@ -97,6 +97,11 @@ The built plugin will be installed to the following directories:
 | Windows | `%LOCALAPPDATA%/Programs/Common/CLAP/` and `%LOCALAPPDATA%/Programs/Common/VST3/` |
 | Linux | `~/.clap/` |
 
+On Windows, `cargo xtask install` installs to the user-local paths by default.
+Use `cargo xtask install --scope=system` to install to `%COMMONPROGRAMFILES%/CLAP/`
+and `%COMMONPROGRAMFILES%/VST3/` for hosts that only scan system-wide plug-in
+folders. `cargo xtask uninstall` removes both user-local and system-wide copies.
+
 VST3 / AU / standalone are built where supported by the current OS. Standalone
 apps do not have a plugin install destination, so xtask prints their artifact
 path instead.

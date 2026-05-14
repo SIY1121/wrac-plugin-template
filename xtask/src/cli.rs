@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::targets::{PluginTarget, Target, ValidateTarget};
 
@@ -36,10 +36,12 @@ Default targets by platform:
 Examples:
   cargo xtask install
   cargo xtask install --release
+  cargo xtask install --scope=system
   cargo xtask install --target=clap,vst3
 
 Notes:
   install copies previously built plugin artifacts.
+  --scope defaults to user. Use --scope=system for hosts that only scan system-wide plugin folders.
   standalone is not a plugin format and cannot be installed with this command.";
 
 const UNINSTALL_AFTER_HELP: &str = "\
@@ -53,7 +55,10 @@ Default targets by platform:
 
 Examples:
   cargo xtask uninstall --target=vst3
-  cargo xtask uninstall --dry-run";
+  cargo xtask uninstall --dry-run
+
+Notes:
+  uninstall removes both user-local and system-wide plugin artifacts.";
 
 const VALIDATE_AFTER_HELP: &str = "\
 Targets:
@@ -98,7 +103,7 @@ pub(crate) enum Commands {
     )]
     Install(InstallArgs),
     #[command(
-        about = "Remove installed user-local plugin artifacts.",
+        about = "Remove installed plugin artifacts from user-local and system-wide paths.",
         after_help = UNINSTALL_AFTER_HELP
     )]
     Uninstall(UninstallArgs),
@@ -141,12 +146,26 @@ pub(crate) struct InstallArgs {
     #[arg(
         long,
         value_enum,
+        default_value_t = InstallScope::User,
+        help = "Install location scope."
+    )]
+    pub(crate) scope: InstallScope,
+
+    #[arg(
+        long,
+        value_enum,
         value_delimiter = ',',
         num_args = 1..,
         help = "Plugin formats to install, comma-separated.",
         long_help = "Plugin formats to install, comma-separated. Supported values are clap, vst3, and au. Defaults to every plugin format supported by the current OS. standalone is not supported here."
     )]
     pub(crate) target: Vec<PluginTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum InstallScope {
+    User,
+    System,
 }
 
 #[derive(Debug, Args)]

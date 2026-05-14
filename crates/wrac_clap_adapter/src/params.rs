@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_host_params};
+use clap_sys::ext::params::{CLAP_EXT_PARAMS, CLAP_PARAM_RESCAN_VALUES, clap_host_params};
 use clap_sys::host::clap_host;
 use parking_lot::Mutex;
 
@@ -17,14 +17,14 @@ use crate::{
 /// CLAP event に変換する。
 pub(crate) struct ParameterEditQueue {
     pending: Mutex<VecDeque<ParameterEditEvent>>,
-    host_flush: Option<HostParamFlush>,
+    host_params: Option<HostParams>,
 }
 
 impl ParameterEditQueue {
     pub(crate) fn new(host: *const clap_host) -> Self {
         Self {
             pending: Mutex::new(VecDeque::new()),
-            host_flush: host_param_flush(host),
+            host_params: host_params(host),
         }
     }
 
@@ -64,12 +64,26 @@ impl ParameterEditQueue {
     }
 
     fn request_flush(&self) {
-        let Some(flush) = self.host_flush else {
+        let Some(params) = self.host_params else {
             return;
         };
 
-        unsafe {
-            (flush.request_flush)(flush.host);
+        if let Some(request_flush) = params.request_flush {
+            unsafe {
+                request_flush(params.host);
+            }
+        }
+    }
+
+    pub(crate) fn rescan_values(&self) {
+        let Some(params) = self.host_params else {
+            return;
+        };
+
+        if let Some(rescan) = params.rescan {
+            unsafe {
+                rescan(params.host, CLAP_PARAM_RESCAN_VALUES);
+            }
         }
     }
 }
@@ -128,17 +142,18 @@ fn push_parameter_edit(events: &mut OutputEvents<'_>, event: ParameterEditEvent)
 }
 
 #[derive(Clone, Copy)]
-struct HostParamFlush {
+struct HostParams {
     host: *const clap_host,
-    request_flush: unsafe extern "C" fn(host: *const clap_host),
+    rescan: Option<unsafe extern "C" fn(host: *const clap_host, flags: u32)>,
+    request_flush: Option<unsafe extern "C" fn(host: *const clap_host)>,
 }
 
 // host pointer の instance lifetime は CLAP ABI で避けられない最小前提です。wrapper
 // 固有の thread/order は信じず、adapter 内では `request_flush()` だけに用途を限定する。
-unsafe impl Send for HostParamFlush {}
-unsafe impl Sync for HostParamFlush {}
+unsafe impl Send for HostParams {}
+unsafe impl Sync for HostParams {}
 
-fn host_param_flush(host: *const clap_host) -> Option<HostParamFlush> {
+fn host_params(host: *const clap_host) -> Option<HostParams> {
     if host.is_null() {
         return None;
     }
@@ -149,10 +164,10 @@ fn host_param_flush(host: *const clap_host) -> Option<HostParamFlush> {
         if params.is_null() {
             return None;
         }
-        let request_flush = (*params).request_flush?;
-        Some(HostParamFlush {
+        Some(HostParams {
             host,
-            request_flush,
+            rescan: (*params).rescan,
+            request_flush: (*params).request_flush,
         })
     }
 }
