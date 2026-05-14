@@ -12,7 +12,7 @@ Targets:
 Default targets by platform:
   macOS:   clap, vst3, au, standalone
   Windows: clap, vst3, standalone
-  Linux:   clap
+  Linux:   clap, vst3
 
 Examples:
   cargo xtask build
@@ -31,7 +31,7 @@ Targets:
 Default targets by platform:
   macOS:   clap, vst3, au
   Windows: clap, vst3
-  Linux:   clap
+  Linux:   clap, vst3
 
 Examples:
   cargo xtask install
@@ -51,7 +51,7 @@ Targets:
 Default targets by platform:
   macOS:   clap, vst3, au
   Windows: clap, vst3
-  Linux:   clap
+  Linux:   clap, vst3
 
 Examples:
   cargo xtask uninstall --target=vst3
@@ -67,7 +67,7 @@ Targets:
 Default targets by platform:
   macOS:   vst3, au
   Windows: vst3
-  Linux:   none
+  Linux:   vst3
 
 Examples:
   cargo xtask validate

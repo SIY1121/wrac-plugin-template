@@ -528,11 +528,15 @@ fn install_dir(ctx: &Context, scope: InstallScope, format: PluginFormat) -> Resu
             return Err("AU is not supported on Windows".into());
         }
         (Platform::Linux, InstallScope::User, PluginFormat::Clap) => home_dir()?.join(".clap"),
+        (Platform::Linux, InstallScope::User, PluginFormat::Vst3) => home_dir()?.join(".vst3"),
         (Platform::Linux, InstallScope::System, PluginFormat::Clap) => {
             PathBuf::from("/usr/lib/clap")
         }
-        (Platform::Linux, _, PluginFormat::Vst3 | PluginFormat::Au) => {
-            return Err("VST3/AU install is not supported on Linux".into());
+        (Platform::Linux, InstallScope::System, PluginFormat::Vst3) => {
+            PathBuf::from("/usr/lib/vst3")
+        }
+        (Platform::Linux, _, PluginFormat::Au) => {
+            return Err("AU is not supported on Linux".into());
         }
     };
     Ok(dir)
