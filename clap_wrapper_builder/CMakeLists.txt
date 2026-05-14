@@ -5,6 +5,7 @@ project(clap_wrapper_builder)
 # Require C++23 or later (required by clap-wrapper and AudioUnitSDK)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET} AND NOT "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "$ENV{MACOSX_DEPLOYMENT_TARGET}")
@@ -91,6 +92,14 @@ endif()
 if(APPLE)
   set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
       INTERFACE_LINK_LIBRARIES "-framework AppKit;-framework Foundation;-framework WebKit"
+  )
+endif()
+
+if(UNIX AND NOT APPLE)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LINUX_PLUGIN_DEPS REQUIRED IMPORTED_TARGET webkit2gtk-4.1 gtk+-3.0 gdk-x11-3.0)
+  set_target_properties(${PLUGIN_NAME_SAFE}_impl PROPERTIES
+      INTERFACE_LINK_LIBRARIES PkgConfig::LINUX_PLUGIN_DEPS
   )
 endif()
 # Generate the source file for the CLAP entry point.
