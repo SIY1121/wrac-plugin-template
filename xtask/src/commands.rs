@@ -66,13 +66,21 @@ fn build_gui(ctx: &Context) -> Result<()> {
     println!("Building GUI...");
     // Rust 側の build.rs が src-gui/dist を埋め込むため、ここで先に frontend を確定させる。
     // 順序を逆にすると古い dist や空の dist を plugin に含める可能性がある。
-    run(Command::new("npm")
+    run(Command::new(npm_command(ctx.platform))
         .arg("install")
         .current_dir(ctx.gui_dir()))?;
-    run(Command::new("npm")
+    run(Command::new(npm_command(ctx.platform))
         .args(["run", "build"])
         .current_dir(ctx.gui_dir()))?;
     Ok(())
+}
+
+fn npm_command(platform: Platform) -> &'static str {
+    if platform == Platform::Windows {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
 }
 
 fn build_rust_plugin(ctx: &Context, profile: BuildProfile) -> Result<()> {
