@@ -37,6 +37,7 @@ pub(crate) const PLUGIN_ID: &str = "com.your-company.wrac-gain";
 // 新しい parameter を追加するときは、ここに `PARAM_*_ID` を増やし、下の
 // `PluginParameters` 実装と `SharedState` の match にも追加する。
 pub(crate) const PARAM_GAIN_ID: u32 = 1;
+pub(crate) const PARAM_BYPASS_ID: u32 = 9;
 
 // gain の値域。1.0 が「そのまま (0 dB)」、0.0 が「無音 (-inf dB)」、
 // 2.0 が「2 倍 (+6 dB)」を表す線形 amplitude。
@@ -96,6 +97,8 @@ pub(crate) struct WracGainPlugin {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SavedPluginState {
     pub(crate) gain: f32,
+    #[serde(default)]
+    pub(crate) bypass: bool,
 }
 
 impl WracGainPlugin {
@@ -129,6 +132,16 @@ pub(crate) fn create_plugin_core(context: PluginCoreContext) -> Box<dyn PluginCo
         "creating plugin core: id={}, name={}",
         PLUGIN_DESCRIPTOR.id,
         PLUGIN_DESCRIPTOR.name
+    );
+    let gain = gain_parameter_info();
+    log::info!(
+        "host parameter schema: id={}, name={}, min={}, max={}, default={}, automatable={}",
+        gain.id,
+        gain.name,
+        gain.min_value,
+        gain.max_value,
+        gain.default_value,
+        gain.flags.is_automatable
     );
     Box::new(WracGainPlugin::new(context))
 }
@@ -270,7 +283,7 @@ impl PluginParameters for WracGainPlugin {
     fn parameter_count(&self) -> u32 {
         // 新しい parameter を追加するときは、この数と `parameter_info()` の match を
         // 一緒に更新する。
-        1
+        2
     }
 
     fn parameter_info(&self, index: u32) -> Option<ParameterInfo> {
@@ -278,35 +291,65 @@ impl PluginParameters for WracGainPlugin {
         // id は DAW project / automation に保存されるので、一度公開した値は変えない。
         match index {
             0 => Some(gain_parameter_info()),
+            1 => Some(bypass_parameter_info()),
             _ => None,
         }
     }
 
     /// host が「今この parameter の値はいくつ?」と尋ねてきたときに答える。
     fn parameter_value(&self, parameter_id: u32) -> PluginResult<f64> {
-        self.shared
-            .parameter_value(parameter_id)
-            .map(|value| value as f64)
-            .ok_or(PluginError::InvalidParameter)
+        match parameter_id {
+            PARAM_GAIN_ID => self
+                .shared
+                .parameter_value(parameter_id)
+                .map(gain_to_host_value)
+                .ok_or(PluginError::InvalidParameter),
+            PARAM_BYPASS_ID => self
+                .shared
+                .parameter_value(parameter_id)
+                .map(|value| value as f64)
+                .ok_or(PluginError::InvalidParameter),
+            _ => Err(PluginError::InvalidParameter),
+        }
     }
 
     /// host から input event として parameter 値が届いたときの経路。
     fn apply_parameter_value(&self, event: ParameterValueEvent) -> PluginResult<f64> {
+        if event.parameter_id == PARAM_BYPASS_ID {
+            return self
+                .shared
+                .set_parameter_value(event.parameter_id, event.value)
+                .map(|value| value as f64)
+                .ok_or(PluginError::InvalidParameter);
+        }
         let value = self
             .shared
-            .set_parameter_value(event.parameter_id, event.value)
+            .set_parameter_value(event.parameter_id, host_value_to_gain(event.value))
             .ok_or(PluginError::InvalidParameter)?;
-        Ok(value as f64)
+        Ok(gain_to_host_value(value))
     }
 
     /// 内部値 → 表示文字列。例: 1.0 → "0.0 dB"。
     fn parameter_value_to_text(&self, parameter_id: u32, value: f64) -> PluginResult<String> {
-        parameter_value_text(parameter_id, value)
+        match parameter_id {
+            PARAM_GAIN_ID => parameter_value_text(parameter_id, host_value_to_gain(value)),
+            PARAM_BYPASS_ID => Ok(if value >= 0.5 { "On" } else { "Off" }.to_string()),
+            _ => Err(PluginError::InvalidParameter),
+        }
     }
 
     /// 表示文字列 → 内部値。ユーザーが host UI に "3 dB" のように入力したとき呼ばれる。
     fn parameter_text_to_value(&self, parameter_id: u32, text: &str) -> PluginResult<f64> {
-        parameter_text_value(parameter_id, text)
+        match parameter_id {
+            PARAM_GAIN_ID => parameter_text_value(parameter_id, text)
+                .map(|value| gain_to_host_value(value as f32)),
+            PARAM_BYPASS_ID => match text.trim().to_ascii_lowercase().as_str() {
+                "on" | "1" | "true" => Ok(1.0),
+                "off" | "0" | "false" => Ok(0.0),
+                _ => Err(PluginError::InvalidParameter),
+            },
+            _ => Err(PluginError::InvalidParameter),
+        }
     }
 }
 
@@ -318,9 +361,14 @@ impl PluginParameters for WracGainPlugin {
 // JSON にしておく (人が読めるとデバッグが楽)。
 impl PluginStateSupport for WracGainPlugin {
     fn save_state(&mut self) -> PluginResult<PluginState> {
-        log::debug!("saving plugin state: gain={}", self.shared.gain());
+        log::debug!(
+            "saving plugin state: gain={}, bypass={}",
+            self.shared.gain(),
+            self.shared.bypass()
+        );
         let bytes = serde_json::to_vec(&SavedPluginState {
             gain: self.shared.gain(),
+            bypass: self.shared.bypass(),
         })
         .map_err(|_| PluginError::InvalidState)?;
         Ok(PluginState { bytes })
@@ -333,6 +381,9 @@ impl PluginStateSupport for WracGainPlugin {
         let gain = self
             .shared
             .set_parameter_value(PARAM_GAIN_ID, state.gain as f64)
+            .ok_or(PluginError::InvalidParameter)?;
+        self.shared
+            .set_parameter_value(PARAM_BYPASS_ID, f64::from(state.bypass))
             .ok_or(PluginError::InvalidParameter)?;
         self.gui_notifier.notify_parameter(PARAM_GAIN_ID, gain);
         Ok(())
@@ -349,13 +400,33 @@ pub(crate) fn gain_parameter_info() -> ParameterInfo {
         id: PARAM_GAIN_ID,
         name: "Gain",
         module: "",
-        min_value: MIN_GAIN as f64,
-        max_value: MAX_GAIN as f64,
-        default_value: DEFAULT_GAIN as f64,
+        min_value: 0.0,
+        max_value: 1.0,
+        default_value: gain_to_host_value(DEFAULT_GAIN),
         flags: ParameterFlags {
             // automation 可能であることを host に伝える。これが false だと
             // DAW で parameter を自動化できなくなる。
             is_automatable: true,
+            ..ParameterFlags::default()
+        },
+    }
+}
+
+fn bypass_parameter_info() -> ParameterInfo {
+    // 一部の host は CLAP generic editor の表示対象を compact parameter set から作る。
+    // bypass parameter がないと、他に automatable parameter があっても editor に
+    // 表示しない host があるため、template でも実際に効く bypass を持っておく。
+    ParameterInfo {
+        id: PARAM_BYPASS_ID,
+        name: "Bypass",
+        module: "",
+        min_value: 0.0,
+        max_value: 1.0,
+        default_value: 0.0,
+        flags: ParameterFlags {
+            is_automatable: true,
+            is_stepped: true,
+            is_bypass: true,
             ..ParameterFlags::default()
         },
     }
@@ -368,6 +439,7 @@ pub(crate) fn gain_parameter_info() -> ParameterInfo {
 pub(crate) fn parameter_value_text(parameter_id: u32, value: f64) -> PluginResult<String> {
     match parameter_id {
         PARAM_GAIN_ID => Ok(gain_db_text(clamp_gain(value as f32) as f64)),
+        PARAM_BYPASS_ID => Ok(if value >= 0.5 { "On" } else { "Off" }.to_string()),
         _ => Err(PluginError::InvalidParameter),
     }
 }
@@ -377,7 +449,8 @@ pub(crate) fn parameter_value_text(parameter_id: u32, value: f64) -> PluginResul
 /// 新しい parameter を追加するときは、この `match parameter_id` に parse 処理を追加する。
 pub(crate) fn parameter_default_value(parameter_id: u32) -> PluginResult<f64> {
     match parameter_id {
-        PARAM_GAIN_ID => Ok(gain_parameter_info().default_value),
+        PARAM_GAIN_ID => Ok(DEFAULT_GAIN as f64),
+        PARAM_BYPASS_ID => Ok(0.0),
         _ => Err(PluginError::InvalidParameter),
     }
 }
@@ -393,8 +466,34 @@ pub(crate) fn parameter_text_value(parameter_id: u32, text: &str) -> PluginResul
             // dB → 線形 amplitude に変換してから clamp。
             Ok(clamp_gain(10.0_f64.powf(db / 20.0) as f32) as f64)
         }
+        PARAM_BYPASS_ID => match text.trim().to_ascii_lowercase().as_str() {
+            "on" | "1" | "true" => Ok(1.0),
+            "off" | "0" | "false" => Ok(0.0),
+            _ => Err(PluginError::InvalidParameter),
+        },
         _ => Err(PluginError::InvalidParameter),
     }
+}
+
+pub(crate) fn parameter_host_value(parameter_id: u32, value: f32) -> PluginResult<f64> {
+    match parameter_id {
+        PARAM_GAIN_ID => Ok(gain_to_host_value(value)),
+        PARAM_BYPASS_ID => Ok(f64::from(value >= 0.5)),
+        _ => Err(PluginError::InvalidParameter),
+    }
+}
+
+pub(crate) fn gain_to_host_value(gain: f32) -> f64 {
+    let span = MAX_GAIN - MIN_GAIN;
+    if span <= 0.0 {
+        return 0.0;
+    }
+    ((clamp_gain(gain) - MIN_GAIN) / span) as f64
+}
+
+pub(crate) fn host_value_to_gain(value: f64) -> f64 {
+    let value = value.clamp(0.0, 1.0) as f32;
+    (MIN_GAIN + value * (MAX_GAIN - MIN_GAIN)) as f64
 }
 
 fn audio_port_type(channel_count: u32) -> AudioPortType {

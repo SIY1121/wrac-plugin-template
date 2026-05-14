@@ -16,7 +16,7 @@ use wrac_clap_adapter::{
     ProcessContext, ProcessStatus, Processor,
 };
 
-use crate::plugin::PARAM_GAIN_ID;
+use crate::plugin::{PARAM_BYPASS_ID, PARAM_GAIN_ID, host_value_to_gain};
 use crate::state::SharedState;
 
 /// [`wrac_clap_adapter::PluginCore::activate`] で生成され、host の audio thread に所有される DSP 実体。
@@ -64,6 +64,7 @@ impl WracGainAudioProcessor {
     fn process_no_alloc(&mut self, mut context: ProcessContext<'_>) -> PluginResult<ProcessStatus> {
         // ブロック開始時点の gain。event が来るたびに更新される。
         let mut gain = self.shared.gain();
+        let mut bypass = self.shared.bypass();
         // 「ここまで処理した」位置を表すカーソル。
         let mut segment_start = 0;
         let frames_count = context.frames_count as usize;
@@ -73,24 +74,42 @@ impl WracGainAudioProcessor {
             // event time は host から信用しない (= buffer 範囲外を防ぐ) ため clamp。
             let event_time = (event.time() as usize).min(frames_count);
             if event_time > segment_start {
-                process_audio_range(&mut context.audio, segment_start, event_time, gain)?;
+                let effective_gain = if bypass { 1.0 } else { gain };
+                process_audio_range(
+                    &mut context.audio,
+                    segment_start,
+                    event_time,
+                    effective_gain,
+                )?;
                 segment_start = event_time;
             }
 
-            // 今回扱うのは gain の parameter event だけ。それ以外 (note 等) は無視。
+            // 今回扱うのは gain / bypass の parameter event だけ。それ以外 (note 等) は無視。
             if let InputEvent::ParamValue(event) = event {
                 if event.parameter_id == PARAM_GAIN_ID {
                     gain = self
                         .shared
-                        .set_parameter_value(event.parameter_id, event.value)
+                        .set_parameter_value(event.parameter_id, host_value_to_gain(event.value))
                         .unwrap_or(gain);
+                } else if event.parameter_id == PARAM_BYPASS_ID {
+                    bypass = self
+                        .shared
+                        .set_parameter_value(event.parameter_id, event.value)
+                        .map(|value| value >= 0.5)
+                        .unwrap_or(bypass);
                 }
             }
         }
 
         // 最後の event 以降、ブロック末尾まで残った範囲を処理する。
         if segment_start < frames_count {
-            process_audio_range(&mut context.audio, segment_start, frames_count, gain)?;
+            let effective_gain = if bypass { 1.0 } else { gain };
+            process_audio_range(
+                &mut context.audio,
+                segment_start,
+                frames_count,
+                effective_gain,
+            )?;
         }
 
         // 入力が無音でなければ次のブロックも処理を続けてほしい、という宣言。

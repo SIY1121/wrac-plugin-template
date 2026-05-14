@@ -13,7 +13,7 @@ use wrac_wxp_gui::WxpGuiResizeHandle;
 use wxp::{Channel, WxpCommandHandler};
 
 use crate::gui::{GuiStateNotifier, GuiSubscriptionId, parameter_payload};
-use crate::plugin::{parameter_default_value, parameter_text_value};
+use crate::plugin::{parameter_default_value, parameter_host_value, parameter_text_value};
 use crate::state::SharedState;
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +60,11 @@ pub(crate) fn register_commands(
                 .set_parameter_value(parameter_id, value)
                 .ok_or_else(|| "invalid parameter id".to_string())?;
             gui_notifier.notify_parameter(parameter_id, applied);
-            host_parameter_edit_notifier.update_edit(parameter_id, applied as f64);
+            host_parameter_edit_notifier.update_edit(
+                parameter_id,
+                parameter_host_value(parameter_id, applied)
+                    .map_err(|_| "invalid parameter id".to_string())?,
+            );
             host_parameter_edit_notifier.end_edit(parameter_id);
             Ok::<_, String>(parameter_payload(parameter_id, applied))
         });
@@ -79,7 +83,11 @@ pub(crate) fn register_commands(
                 .set_parameter_value(parameter_id, value)
                 .ok_or_else(|| "invalid parameter id".to_string())?;
             gui_notifier.notify_parameter(parameter_id, applied);
-            host_parameter_edit_notifier.update_edit(parameter_id, applied as f64);
+            host_parameter_edit_notifier.update_edit(
+                parameter_id,
+                parameter_host_value(parameter_id, applied)
+                    .map_err(|_| "invalid parameter id".to_string())?,
+            );
             host_parameter_edit_notifier.end_edit(parameter_id);
             Ok::<_, String>(parameter_payload(parameter_id, applied))
         });
@@ -107,7 +115,11 @@ pub(crate) fn register_commands(
                 .set_parameter_value(parameter_id, value)
                 .ok_or_else(|| "invalid parameter id".to_string())?;
             gui_notifier.notify_parameter(parameter_id, applied);
-            host_parameter_edit_notifier.update_edit(parameter_id, applied as f64);
+            host_parameter_edit_notifier.update_edit(
+                parameter_id,
+                parameter_host_value(parameter_id, applied)
+                    .map_err(|_| "invalid parameter id".to_string())?,
+            );
             Ok::<_, String>(parameter_payload(parameter_id, applied))
         });
     }

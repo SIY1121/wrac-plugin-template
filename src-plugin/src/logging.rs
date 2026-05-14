@@ -69,6 +69,7 @@ impl Log for DebugFileLogger {
         if let Ok(mut file) = self.file.lock() {
             if let Some(file) = file.as_mut() {
                 let _ = file.write_all(line.as_bytes());
+                let _ = file.flush();
             }
         }
     }
@@ -102,6 +103,7 @@ impl DebugFileLogger {
         if let Ok(mut file) = self.file.lock() {
             if let Some(file) = file.as_mut() {
                 let _ = file.write_all(line.as_bytes());
+                let _ = file.flush();
             }
         }
     }

@@ -3,11 +3,11 @@
 //! この module は「値の SoT」と「状態不整合を防ぐ最小限の操作」だけを持つ。
 //! GUI への配送や host への edit 通知は、それぞれ `gui.rs` / `commands.rs` 側で扱う。
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_float::AtomicF32;
 
-use crate::plugin::{DEFAULT_GAIN, PARAM_GAIN_ID, clamp_gain};
+use crate::plugin::{DEFAULT_GAIN, PARAM_BYPASS_ID, PARAM_GAIN_ID, clamp_gain};
 
 /// audio processor / GUI / host からの問い合わせ が共有する thread-safe な state。
 ///
@@ -22,17 +22,24 @@ use crate::plugin::{DEFAULT_GAIN, PARAM_GAIN_ID, clamp_gain};
 pub(crate) struct SharedState {
     // gain の現在値 (線形 amplitude)。lock-free に読み書きする。
     gain: AtomicF32,
+    // host の bypass parameter。audio thread から読むので lock-free に保持する。
+    bypass: AtomicBool,
 }
 
 impl SharedState {
     pub(crate) fn new() -> Self {
         Self {
             gain: AtomicF32::new(DEFAULT_GAIN),
+            bypass: AtomicBool::new(false),
         }
     }
 
     pub(crate) fn gain(&self) -> f32 {
         self.gain.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn bypass(&self) -> bool {
+        self.bypass.load(Ordering::Acquire)
     }
 
     /// 指定された parameter の現在値を返す。
@@ -42,6 +49,7 @@ impl SharedState {
     pub(crate) fn parameter_value(&self, parameter_id: u32) -> Option<f32> {
         match parameter_id {
             PARAM_GAIN_ID => Some(self.gain()),
+            PARAM_BYPASS_ID => Some(f32::from(self.bypass())),
             _ => None,
         }
     }
@@ -57,6 +65,11 @@ impl SharedState {
                 let gain = clamp_gain(value as f32);
                 self.gain.store(gain, Ordering::Release);
                 Some(gain)
+            }
+            PARAM_BYPASS_ID => {
+                let bypass = value >= 0.5;
+                self.bypass.store(bypass, Ordering::Release);
+                Some(f32::from(bypass))
             }
             _ => None,
         }
