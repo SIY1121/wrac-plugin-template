@@ -163,17 +163,16 @@ unsafe impl Send for ClapPluginFactoryAsAuv2 {}
 
 // `clap_plugin_descriptor` は C string pointer だけを保持するため、CString/feature
 // pointer の owner を同じ storage に置いて descriptor pointer の有効期間を揃える。
-#[allow(dead_code)]
 pub(crate) struct ClapDescriptorStorage {
-    id: CString,
-    name: CString,
-    vendor: CString,
-    url: CString,
-    manual_url: CString,
-    support_url: CString,
-    version: CString,
-    description: CString,
-    feature_ptrs: Vec<*const c_char>,
+    _id: CString,
+    _name: CString,
+    _vendor: CString,
+    _url: CString,
+    _manual_url: CString,
+    _support_url: CString,
+    _version: CString,
+    _description: CString,
+    _feature_ptrs: Vec<*const c_char>,
     auv2_manufacturer_code: Option<CString>,
     auv2_manufacturer_name: Option<CString>,
     clap_descriptor: clap_plugin_descriptor,
@@ -221,15 +220,15 @@ impl ClapDescriptorStorage {
         };
 
         Self {
-            id,
-            name,
-            vendor,
-            url,
-            manual_url,
-            support_url,
-            version,
-            description,
-            feature_ptrs,
+            _id: id,
+            _name: name,
+            _vendor: vendor,
+            _url: url,
+            _manual_url: manual_url,
+            _support_url: support_url,
+            _version: version,
+            _description: description,
+            _feature_ptrs: feature_ptrs,
             auv2_manufacturer_code,
             auv2_manufacturer_name,
             clap_descriptor,

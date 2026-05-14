@@ -85,6 +85,11 @@ impl Timer {
         }
     }
 
+    /// Callback-local state を持つ timer を簡潔に作る helper。
+    ///
+    /// 現在の template 本体では使っていないが、plugin ごとの GUI polling や軽量な
+    /// debounce state を追加するときに `Rc<RefCell<_>>` の boilerplate を利用者へ
+    /// 書かせないために public API として残している。
     pub fn new_with_state<T, F>(interval: Duration, initial_state: T, callback: F) -> Self
     where
         T: 'static,
