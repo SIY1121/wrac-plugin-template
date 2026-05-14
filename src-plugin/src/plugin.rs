@@ -122,6 +122,14 @@ impl WracGainPlugin {
 /// host が新しい plugin instance を必要としたタイミングで adapter が呼び出し、
 /// trait object として [`PluginCore`] を返す。実装の差し替えはここを変えるだけ。
 pub(crate) fn create_plugin_core(context: PluginCoreContext) -> Box<dyn PluginCore> {
+    #[cfg(debug_assertions)]
+    crate::logging::init_debug_logging_once(PLUGIN_DESCRIPTOR.name);
+
+    log::debug!(
+        "creating plugin core: id={}, name={}",
+        PLUGIN_DESCRIPTOR.id,
+        PLUGIN_DESCRIPTOR.name
+    );
     Box::new(WracGainPlugin::new(context))
 }
 
@@ -132,13 +140,21 @@ pub(crate) fn create_plugin_core(context: PluginCoreContext) -> Box<dyn PluginCo
 impl PluginCore for WracGainPlugin {
     /// host が audio 処理を開始する直前に呼ばれる。
     /// ここで返した `Processor` が以降 audio thread 上で `process()` される。
-    fn activate(&mut self, _context: ActivateContext) -> PluginResult<Box<dyn Processor>> {
+    fn activate(&mut self, context: ActivateContext) -> PluginResult<Box<dyn Processor>> {
+        log::debug!(
+            "activating audio processor: sample_rate={}, min_frames_count={}, max_frames_count={}, audio_channel_count={}",
+            context.sample_rate,
+            context.min_frames_count,
+            context.max_frames_count,
+            self.audio_channel_count
+        );
         Ok(Box::new(WracGainAudioProcessor::new(self.shared.clone())))
     }
 
     /// host が audio 処理を停止したときに呼ばれる。
     /// `_processor` は `activate` で返した実体。drop すれば clean up される。
     fn deactivate(&mut self, _processor: Box<dyn Processor>) -> PluginResult<()> {
+        log::debug!("deactivating audio processor");
         Ok(())
     }
 
@@ -226,8 +242,20 @@ impl PluginConfigurableAudioPorts for WracGainPlugin {
     ) -> PluginResult<()> {
         // adapter 側が Processor の存在中は configuration apply を拒否するので、
         // core の通常 field を更新すれば後続の port 問い合わせと次回 activate に反映される。
-        let channel_count = resolve_audio_channel_count(self.audio_channel_count, requests)
-            .ok_or(PluginError::InvalidState)?;
+        let channel_count =
+            resolve_audio_channel_count(self.audio_channel_count, requests).ok_or_else(|| {
+                log::warn!(
+                    "rejecting unsupported audio port configuration: request_count={}, current_channel_count={}",
+                    requests.len(),
+                    self.audio_channel_count
+                );
+                PluginError::InvalidState
+            })?;
+        log::debug!(
+            "applying audio port configuration: previous_channel_count={}, channel_count={}",
+            self.audio_channel_count,
+            channel_count
+        );
         self.audio_channel_count = channel_count;
         Ok(())
     }
@@ -290,6 +318,7 @@ impl PluginParameters for WracGainPlugin {
 // JSON にしておく (人が読めるとデバッグが楽)。
 impl PluginStateSupport for WracGainPlugin {
     fn save_state(&mut self) -> PluginResult<PluginState> {
+        log::debug!("saving plugin state: gain={}", self.shared.gain());
         let bytes = serde_json::to_vec(&SavedPluginState {
             gain: self.shared.gain(),
         })
@@ -298,6 +327,7 @@ impl PluginStateSupport for WracGainPlugin {
     }
 
     fn restore_state(&mut self, state: PluginState) -> PluginResult<()> {
+        log::debug!("restoring plugin state: byte_count={}", state.bytes.len());
         let state: SavedPluginState =
             serde_json::from_slice(&state.bytes).map_err(|_| PluginError::InvalidState)?;
         let gain = self

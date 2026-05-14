@@ -8,6 +8,10 @@ on:
       - main
       - develop
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     shell: bash
@@ -17,9 +21,9 @@ env:
   WRY_OBJC_SUFFIX: WracGainPlugin
 
 jobs:
-  rust-quality:
-    name: Rust format and lint
-    runs-on: macos-14
+  rust-format:
+    name: Rust format
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -34,16 +38,27 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Run Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+  rust-test:
+    name: Rust lint and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
 
-  test:
-    name: Test
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev
 
       - name: Show Rust version
         run: |
@@ -51,21 +66,59 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Run Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
       - name: Run tests
         run: cargo test --locked --workspace
 
-  plugin-validation:
-    name: Build and validate macOS plugin bundles
-    runs-on: macos-14
+  plugin-build:
+    name: Build plugin artifacts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs:
-      - rust-quality
-      - test
+      - rust-format
+      - rust-test
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: clap
+            validate-targets: ""
+            verify: |
+              test -f "target/wrac/plugins/release/WRAC Gain.clap"
+          - os: windows-latest
+            targets: clap,vst3,standalone
+            validate-targets: vst3
+            verify: |
+              test -f "target/wrac/plugins/release/WRAC Gain.clap"
+              test -d "target/wrac/plugins/release/WRAC Gain.vst3"
+              test -f "target/wrac/standalone/release/WRAC Gain Standalone.exe"
+          - os: macos-latest
+            targets: clap,vst3,au,standalone
+            validate-targets: vst3,au
+            verify: |
+              test -d "target/wrac/plugins/release/WRAC Gain.clap"
+              test -d "target/wrac/plugins/release/WRAC Gain.vst3"
+              test -d "target/wrac/plugins/release/WRAC Gain.component"
+              test -d "target/wrac/standalone/release/WRAC Gain Standalone.app"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Install Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev
+
+      - name: Add msbuild to PATH
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -76,17 +129,21 @@ jobs:
 
       - name: Show tool versions
         run: |
+          rustup show
           rustc --version
           cargo --version
           cmake --version
-          xcodebuild -version
-          /usr/bin/auval -h || true
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            xcodebuild -version
+            /usr/bin/auval -h || true
+          fi
 
-      - name: Build and validate plugin bundles
-        run: cargo xtask build --release --target=clap,vst3,au --validate
+      - name: Build plugin artifacts
+        run: cargo xtask build --release --target=${{ matrix.targets }}
 
-      - name: Verify plugin bundles
-        run: |
-          test -d "target/wrac/artifacts/release/WRAC Gain.clap"
-          test -d "target/wrac/artifacts/release/WRAC Gain.vst3"
-          test -d "target/wrac/artifacts/release/WRAC Gain.component"
+      - name: Validate plugin artifacts
+        if: matrix.validate-targets != ''
+        run: cargo xtask validate --release --target=${{ matrix.validate-targets }}
+
+      - name: Verify plugin artifacts
+        run: ${{ matrix.verify }}

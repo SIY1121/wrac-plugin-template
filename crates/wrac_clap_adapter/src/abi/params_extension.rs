@@ -28,7 +28,8 @@ pub(super) static PARAMS: clap_plugin_params = clap_plugin_params {
 
 // VST3/AU/AAX wrapper では parameter query が CLAP の `[main-thread]` 前提から外れて
 // 呼ばれることがある。ここは read lock と `PluginCore` の `&self` API だけに寄せ、
-// GUI/runtime 所有権や lifecycle mutation に入らない。
+// GUI/runtime 所有権や lifecycle mutation に入らない。state restore などの write 側と
+// 競合した場合も待たず、host へ「今は取得不可」を返す。
 unsafe extern "C" fn params_count(plugin: *const clap_plugin) -> u32 {
     ffi_u32(|| {
         let Some(instance) = (unsafe { PluginInstance::from_plugin(plugin) }) else {

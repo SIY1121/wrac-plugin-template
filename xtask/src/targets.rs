@@ -32,14 +32,6 @@ impl Target {
             Self::Standalone => None,
         }
     }
-
-    pub(crate) fn validate_target(self) -> Option<ValidateTarget> {
-        match self {
-            Self::Vst3 => Some(ValidateTarget::Vst3),
-            Self::Au => Some(ValidateTarget::Au),
-            Self::Clap | Self::Standalone => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -110,6 +102,8 @@ impl Platform {
     }
 
     pub(crate) fn supports_wrappers(self) -> bool {
+        // Linux は現状 CLAP のみを配布対象にしている。
+        // clap-wrapper 自体の可能性ではなく、この template が保証する build surface を返す。
         matches!(self, Self::Macos | Self::Windows)
     }
 
@@ -127,6 +121,8 @@ impl Platform {
     }
 
     pub(crate) fn default_build_targets(self) -> Vec<Target> {
+        // 無指定 build は「その OS で開発者が期待する全部」を作る。
+        // Linux で wrapper を既定に含めないのは、未対応 target の長い CMake 失敗を避けるため。
         match self {
             Self::Macos => vec![Target::Clap, Target::Vst3, Target::Au, Target::Standalone],
             Self::Windows => vec![Target::Clap, Target::Vst3, Target::Standalone],
@@ -143,6 +139,8 @@ impl Platform {
     }
 
     pub(crate) fn default_validate_targets(self) -> Vec<ValidateTarget> {
+        // validate は既に build 済みの wrapper artifact を確認する command。
+        // CLAP にはここで呼ぶ外部 validator がないため、VST3/AU だけを対象にする。
         match self {
             Self::Macos => vec![ValidateTarget::Vst3, ValidateTarget::Au],
             Self::Windows => vec![ValidateTarget::Vst3],
@@ -244,6 +242,8 @@ pub(crate) fn resolve_validate_targets(
 }
 
 fn dedup<T: Copy + PartialEq>(targets: Vec<T>) -> Vec<T> {
+    // CLI では `--target=vst3,vst3` のような重複入力を許す。
+    // エラーにせず順序だけ保って重複排除し、script からの呼び出しを寛容にする。
     let mut unique = Vec::new();
     for target in targets {
         if !unique.contains(&target) {

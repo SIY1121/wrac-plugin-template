@@ -12,7 +12,7 @@ use clap_sys::events::{
     clap_output_events, clap_transport_flags,
 };
 
-use crate::core::ParameterValueEvent;
+use crate::api::ParameterValueEvent;
 
 /// `process()` / `flush()` の CLAP event list を callback lifetime に閉じ込める view。
 ///
@@ -64,7 +64,7 @@ impl<'a> InputEvents<'a> {
         self.len() == 0
     }
 
-    pub fn get(&self, index: u32) -> Option<InputEvent<'a>> {
+    pub fn get(&self, index: u32) -> Option<InputEvent> {
         if index >= self.len() || self.raw.is_null() {
             return None;
         }
@@ -98,8 +98,8 @@ pub struct InputEventsIter<'a> {
     len: u32,
 }
 
-impl<'a> Iterator for InputEventsIter<'a> {
-    type Item = InputEvent<'a>;
+impl Iterator for InputEventsIter<'_> {
+    type Item = InputEvent;
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.index < self.len {
@@ -188,7 +188,7 @@ impl<'a> OutputEvents<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum InputEvent<'a> {
+pub enum InputEvent {
     NoteOn(NoteEvent),
     NoteOff(NoteEvent),
     NoteChoke(NoteEvent),
@@ -199,13 +199,13 @@ pub enum InputEvent<'a> {
     ParamGestureBegin(ParameterGestureEvent),
     ParamGestureEnd(ParameterGestureEvent),
     Transport(TransportEvent),
-    Unknown(UnknownEvent<'a>),
+    Unknown(UnknownEvent),
 }
 
-impl<'a> InputEvent<'a> {
-    unsafe fn from_header(header: &'a clap_event_header) -> Option<Self> {
+impl InputEvent {
+    unsafe fn from_header(header: &clap_event_header) -> Option<Self> {
         if header.space_id != CLAP_CORE_EVENT_SPACE_ID {
-            return Some(Self::Unknown(UnknownEvent { header }));
+            return Some(Self::Unknown(UnknownEvent::from_header(header)));
         }
 
         match header.type_ {
@@ -257,7 +257,7 @@ impl<'a> InputEvent<'a> {
                     cast_event(header)
                 })))
             }
-            _ => Some(Self::Unknown(UnknownEvent { header })),
+            _ => Some(Self::Unknown(UnknownEvent::from_header(header))),
         }
     }
 
@@ -272,7 +272,7 @@ impl<'a> InputEvent<'a> {
             Self::ParamMod(event) => event.time,
             Self::ParamGestureBegin(event) | Self::ParamGestureEnd(event) => event.time,
             Self::Transport(event) => event.time,
-            Self::Unknown(event) => event.header.time,
+            Self::Unknown(event) => event.time,
         }
     }
 }
@@ -463,9 +463,21 @@ impl TransportEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct UnknownEvent<'a> {
-    pub header: &'a clap_event_header,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownEvent {
+    pub time: u32,
+    pub space_id: u16,
+    pub event_type: u16,
+}
+
+impl UnknownEvent {
+    fn from_header(header: &clap_event_header) -> Self {
+        Self {
+            time: header.time,
+            space_id: header.space_id,
+            event_type: header.type_,
+        }
+    }
 }
 
 fn parameter_value_from_raw(raw: &clap_event_param_value) -> ParameterValueEvent {

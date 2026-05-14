@@ -39,6 +39,8 @@ pub(crate) fn ensure_exists(path: &Path, description: &str) -> Result<()> {
 }
 
 pub(crate) fn run(command: &mut Command) -> Result<()> {
+    // xtask は build orchestration なので、失敗時に実際の外部 command が見えることが重要。
+    // shell を経由せず Command で実行しつつ、人間が再実行しやすい形だけを表示する。
     println!("$ {}", format_command(command));
     let status = command.status()?;
     if !status.success() {
@@ -68,6 +70,8 @@ fn shell_display(value: &OsStr) -> String {
 }
 
 pub(crate) fn remove_if_exists(path: &Path) -> Result<()> {
+    // clean/install は何度実行しても同じ結果にしたい。
+    // missing を正常系にすることで、途中失敗後の再実行や dry な環境を扱いやすくする。
     if !path.exists() {
         return Ok(());
     }

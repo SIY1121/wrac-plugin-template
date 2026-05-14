@@ -4,15 +4,15 @@
 //! entry を宣言する。`clap-sys`、raw pointer、CLAP event 変換、host callback は
 //! adapter 内部に閉じる。
 
-mod clap;
-mod core;
+mod abi;
+mod api;
 mod descriptor;
 mod events;
 mod host_gui;
 mod params;
 mod process_buffer;
 
-pub use core::{
+pub use api::{
     ActivateContext, AudioPortConfigurationRequest, AudioPortFlags, AudioPortInfo, AudioPortType,
     ClapWindow, GuiApi, GuiConfiguration, GuiResizeHints, GuiSize, HostGuiResizeRequester,
     HostParameterEditNotifier, NoteDialects, NotePortInfo, ParameterFlags, ParameterInfo,
@@ -36,7 +36,7 @@ pub mod __private {
     pub use clap_sys::version::CLAP_VERSION;
     pub use std::ffi::{c_char, c_void};
 
-    pub use crate::clap::{entry_deinit, entry_get_factory, entry_init};
+    pub use crate::abi::{entry_deinit, entry_get_factory, entry_init};
     pub use crate::descriptor::PluginRegistration;
 }
 

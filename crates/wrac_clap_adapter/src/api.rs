@@ -1,9 +1,17 @@
-//! WRAC plugin implementation が adapter へ提供する安全な境界。
+//! プラグイン実装と adapter の間のインターフェース。
 //!
 //! Native CLAP の thread annotation だけを信じると、clap-wrapper 経由の
 //! VST3/AU/AAX host で成立しない呼び出し順や呼び出し thread が混ざる。ここでは
 //! wrapper でも守れる最小契約だけを public API にし、FFI と CLAP callback pointer は
 //! adapter 内部に閉じ込める。
+//!
+//! adapter は FFI callback で発生した panic を C ABI の外へ伝播させない。製品実装は
+//! safe trait だけを実装し、panic / error は callback ごとの失敗値へ変換される前提で扱う。
+//!
+//! query 系 trait は `&self` を第一引数とし、任意の thread から並行に読める実装を要求する。
+//!
+//! host / wrapper は CLAP の `[main-thread]` 注釈通りに query を呼ぶとは限らないため、
+//! schema や現在値の読み取りなどの軽量クエリは GUI/runtime 専用 state のロックを待たない形へ寄せる。
 
 use std::error::Error;
 use std::ffi::{CStr, c_void};

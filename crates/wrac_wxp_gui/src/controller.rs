@@ -54,20 +54,6 @@ pub struct WxpGuiResizeHandle {
 }
 
 impl WxpGuiController {
-    pub fn new(factory: impl WxpGuiFactory, initial_size: GuiSize) -> Self {
-        let size_limits = GuiSizeLimits {
-            min: GuiSize {
-                width: 1,
-                height: 1,
-            },
-            max: GuiSize {
-                width: u32::MAX,
-                height: u32::MAX,
-            },
-        };
-        Self::new_with_resize_handle(factory, WxpGuiResizeHandle::new(initial_size, size_limits))
-    }
-
     pub fn new_with_resize_handle(
         factory: impl WxpGuiFactory,
         resize_handle: WxpGuiResizeHandle,
@@ -81,20 +67,6 @@ impl WxpGuiController {
                 parent: None,
                 handle: None,
             }),
-        }
-    }
-
-    pub fn with_size_limits(mut self, limits: GuiSizeLimits) -> Self {
-        Arc::get_mut(&mut self.layout)
-            .expect("size limits must be configured before sharing controller")
-            .set_limits(limits);
-        self
-    }
-
-    pub fn resize_handle(&self) -> WxpGuiResizeHandle {
-        WxpGuiResizeHandle {
-            layout: self.layout.clone(),
-            scale: self.scale.clone(),
         }
     }
 
@@ -144,12 +116,6 @@ impl HostGuiLayout {
 
     fn accepted_size(&self) -> GuiSize {
         self.accepted_size.load()
-    }
-
-    fn set_limits(&mut self, limits: GuiSizeLimits) {
-        self.limits = limits;
-        self.accepted_size
-            .store(self.clamp_size(self.accepted_size()));
     }
 
     fn clamp_size(&self, size: GuiSize) -> GuiSize {

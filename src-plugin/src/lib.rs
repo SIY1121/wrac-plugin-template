@@ -15,6 +15,11 @@
 //! - `audio.rs`  : audio thread 上で動く DSP (gain を掛けるだけ)。
 //! - `gui.rs`    : WebView ベースの GUI runtime (HTML/JS で UI を作る)。
 //! - `commands.rs` : WebView frontend から呼べる Rust command。
+//!
+//! ログは `log` facade を使います。
+//! debug build ではテンプレート用の簡易 logger を 初期化し、
+//! stderr と repository root の `.log/WRAC Gain Latest.log` の両方へ出します。
+//! 製品固有の logger へ差し替える運用を想定しています。
 
 #[cfg(debug_assertions)]
 use assert_no_alloc::*;
@@ -26,6 +31,8 @@ static ALLOC_DISABLER: AllocDisabler = AllocDisabler;
 mod audio;
 mod commands;
 mod gui;
+#[cfg(debug_assertions)]
+mod logging;
 mod plugin;
 mod state;
 

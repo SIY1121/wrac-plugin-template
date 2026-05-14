@@ -1,13 +1,9 @@
 # src-plugin
 
-`src-plugin` は WRAC Gain 固有の plugin crate です。
+## サブクレート
 
-この crate には gain parameter、state serialization、audio processor、WebView の画面内容と command handler だけを置きます。CLAP C ABI、host callback、raw window handle 変換、run loop 上の GUI runtime 保持は下位 crate の責務です。
+この src-plugin の実装は、`../crates/` にある、サブクレート群に依存しています。
 
-## 依存境界
-
-- `wrac_clap_adapter`: CLAP entry point と extension callback の adapter
-- `wrac_wxp_gui`: wxp WebView を CLAP GUI として扱う helper
-- `src-plugin`: gain plugin 固有の DSP、state、GUI command
-
-製品固有コードから unsafe をなくすことを優先します。platform handle や CLAP pointer が必要になった場合は、まず adapter/helper 側の境界として表現できるかを検討してください。
+- [wrac_clap_adapter](../crates/wrac_clap_adapter/README.md): PluginCore と extension の trait を定義し、その実装と CLAP の C ABI を接続します。
+- [wrac_wxp_gui](../crates/wrac_wxp_gui/README.md): WXP を CLAP GUI として扱うための helper です。
+- [run_loop_timer](../crates/run_loop_timer/README.md): `novonotes_run_loop` 上で繰り返し処理を実行する小さな timer crate です。

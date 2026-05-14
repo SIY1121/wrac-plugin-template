@@ -61,7 +61,13 @@ const CLAP_PLUGIN_FACTORY_INFO_AUV2: &CStr = c"clap.plugin-factory-info-as-auv2.
 /// audio callback が直接必要とする state は `Processor` / notifier 側へ分離する。
 pub(crate) struct PluginInstance {
     plugin: clap_plugin,
+    // `PluginCore` は lifecycle と mutable extension state の所有者です。wrapper format では
+    // CLAP の thread annotation と違う順序・thread で callback が再入することがあるため、
+    // query / flush は `try_read()`、state / configurable ports は `try_write()` に寄せる。
+    // lock cycle を待つより、その callback だけ失敗値を返して host 依存の deadlock を避ける。
     core: RwLock<Box<dyn PluginCore>>,
+    // `get_extension()` は thread-safe callback なので、ここで `PluginCore` lock を取らない。
+    // instance 作成時点の capability に固定し、以後は immutable な function table だけを返す。
     capabilities: PluginCapabilities,
     gui: Option<Arc<dyn PluginGui>>,
     // GUI mutation callback は native UI lifecycle に触れる。wrapper が再入・並行
@@ -500,6 +506,9 @@ unsafe extern "C" fn plugin_process(
             Err(_) => return CLAP_PROCESS_ERROR,
         };
 
+        // audio callback は `PluginCore` の lock を取らない。処理可能かどうかも別 flag ではなく
+        // 実際の `Processor` の有無だけで決める。wrapper が lifecycle 順序を崩した場合でも、
+        // RT 経路では待たずに sleep/error へ倒す。
         let Some(result) = instance.with_processor_mut(|processor| {
             let Some(processor) = processor else {
                 return CLAP_PROCESS_SLEEP;

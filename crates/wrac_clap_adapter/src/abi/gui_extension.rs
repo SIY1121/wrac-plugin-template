@@ -310,8 +310,18 @@ unsafe fn clap_window_to_rust(window: &clap_window) -> Option<ClapWindow> {
     match api {
         GuiApi::Cocoa => ClapWindow::cocoa(unsafe { window.specific.cocoa }),
         GuiApi::Win32 => ClapWindow::win32(unsafe { window.specific.win32 }),
-        GuiApi::X11 => ClapWindow::x11(unsafe { window.specific.x11 }),
+        GuiApi::X11 => ClapWindow::x11(clap_x11_window_id(window)),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn clap_x11_window_id(window: &clap_window) -> u64 {
+    unsafe { window.specific.x11 }.into()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clap_x11_window_id(window: &clap_window) -> u64 {
+    unsafe { window.specific.x11 }
 }
 
 fn gui_api_from_c(api: *const c_char) -> Option<GuiApi> {
