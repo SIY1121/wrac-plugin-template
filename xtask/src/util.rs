@@ -41,6 +41,8 @@ pub(crate) fn ensure_exists(path: &Path, description: &str) -> Result<()> {
 pub(crate) fn run(command: &mut Command) -> Result<()> {
     // xtask は build orchestration なので、失敗時に実際の外部 command が見えることが重要。
     // shell を経由せず Command で実行しつつ、人間が再実行しやすい形だけを表示する。
+    println!();
+    println!("========== Running command ==========");
     println!("$ {}", format_command(command));
     let status = command.status()?;
     if !status.success() {

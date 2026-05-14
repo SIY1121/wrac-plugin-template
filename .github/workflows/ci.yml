@@ -42,6 +42,9 @@ jobs:
     name: Rust lint and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
+    # Keep clippy and tests in one per-OS job so both checks share the same
+    # checkout and compiled dependency graph. Splitting them would make the CI
+    # shape look cleaner, but would duplicate setup and much of the Rust build.
     strategy:
       fail-fast: false
       matrix:
@@ -73,7 +76,7 @@ jobs:
         run: cargo test --locked --workspace
 
   plugin-build:
-    name: Build plugin artifacts (${{ matrix.os }})
+    name: Plugin artifact validation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs:
       - rust-format
