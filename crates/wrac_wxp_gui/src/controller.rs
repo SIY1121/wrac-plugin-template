@@ -38,6 +38,11 @@ struct HostGuiLayout {
     // CLAP layout queries read this without entering the GUI runtime.
     // The accepted size is the controller's host contract, not copied runtime state.
     accepted_size: AtomicGuiSize,
+    // Some wrappers call `set_size()` reentrantly from inside `request_resize()` even
+    // when the resize request returns false. The revision lets the request path detect
+    // that host-confirmed size without taking the GUI runtime lock or guessing from
+    // the boolean return value.
+    accepted_size_revision: AtomicU64,
     limits: GuiSizeLimits,
     resize_policy: GuiResizePolicy,
 }
@@ -506,6 +511,7 @@ impl HostGuiLayout {
         let size = clamp_size_with_limits(size, limits);
         Self {
             accepted_size: AtomicGuiSize::new(size),
+            accepted_size_revision: AtomicU64::new(0),
             limits,
             resize_policy,
         }
@@ -532,6 +538,11 @@ impl HostGuiLayout {
 
     fn store_accepted_size(&self, size: GuiSize) {
         self.accepted_size.store(size);
+        self.accepted_size_revision.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn accepted_size_revision(&self) -> u64 {
+        self.accepted_size_revision.load(Ordering::Relaxed)
     }
 
     fn can_resize(&self) -> bool {
@@ -566,16 +577,42 @@ impl WxpGuiResizeHandle {
             width: logical_size.width as u32,
             height: logical_size.height as u32,
         };
-        host_gui_resize_requester.request_resize(gui_size)?;
 
-        self.layout.store_accepted_size(gui_size);
-        let scale = *self.scale.lock();
-        // Commands receive `WebViewDispatch`, not the native WebView owner. That keeps resize
-        // requests usable from command handlers without extending a closing editor's lifetime.
-        web_view
-            .post_set_bounds(DpiConverter::new(scale).create_webview_bounds(logical_size))
-            .map_err(|_| PluginError::Message("failed to resize webview"))?;
-        Ok(gui_size)
+        let previous_revision = self.layout.accepted_size_revision();
+        let resize_result = host_gui_resize_requester.request_resize(gui_size);
+        let current_revision = self.layout.accepted_size_revision();
+
+        // Logic's AUv2 wrapper currently applies the NSView frame and calls back into
+        // `set_size()` during `request_resize()`, then reports `false` to the CLAP
+        // request. Treat the reentrant `set_size()` as the source of truth: posting an
+        // extra optimistic WebView resize here makes the WebView and host fight over
+        // geometry and can produce visible bouncing while dragging the resize grip.
+        if current_revision != previous_revision {
+            return Ok(self.layout.accepted_size());
+        }
+
+        match resize_result {
+            Ok(()) => {
+                // Some hosts accept the request but do not immediately call `set_size()`.
+                // In that case the plugin owns the WebView update so the editor can
+                // resize without waiting for an optional host callback.
+                // Commands receive `WebViewDispatch`, not the native WebView owner.
+                // That keeps resize requests usable from command handlers without
+                // extending a closing editor's lifetime.
+                let scale = *self.scale.lock();
+                web_view
+                    .post_set_bounds(DpiConverter::new(scale).create_webview_bounds(logical_size))
+                    .map_err(|_| PluginError::Message("failed to resize webview"))?;
+                self.layout.store_accepted_size(gui_size);
+                Ok(gui_size)
+            }
+            Err(error) => {
+                // A real rejection is different from the AUv2 reentrant-set_size case
+                // above. Keep the last host-confirmed size instead of speculatively
+                // moving the child WebView and later snapping it back.
+                Err(error)
+            }
+        }
     }
 }
 
