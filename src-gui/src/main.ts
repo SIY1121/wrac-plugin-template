@@ -30,6 +30,13 @@ type ParameterState = {
   text: string;
 };
 
+type EditorPage = "controls" | "about";
+
+type EditorPageState = {
+  type: "editor-page";
+  page: EditorPage;
+};
+
 type SubscribeParametersResponse = {
   ok?: boolean;
   subscriptionId: number;
@@ -53,8 +60,23 @@ const buildInfo = document.querySelector<HTMLParagraphElement>("#build-info");
 const knob = document.querySelector<HTMLButtonElement>("#gain-knob");
 const indicator = document.querySelector<HTMLDivElement>("#knob-indicator");
 const resizeGrip = document.querySelector<HTMLButtonElement>("#resize-grip");
+const tabControls = document.querySelector<HTMLButtonElement>("#tab-controls");
+const tabAbout = document.querySelector<HTMLButtonElement>("#tab-about");
+const pageControls = document.querySelector<HTMLElement>("#page-controls");
+const pageAbout = document.querySelector<HTMLElement>("#page-about");
 
-if (!dbLabel || !gainInput || !buildInfo || !knob || !indicator || !resizeGrip) {
+if (
+  !dbLabel ||
+  !gainInput ||
+  !buildInfo ||
+  !knob ||
+  !indicator ||
+  !resizeGrip ||
+  !tabControls ||
+  !tabAbout ||
+  !pageControls ||
+  !pageAbout
+) {
   throw new Error("required elements not found");
 }
 
@@ -69,6 +91,7 @@ let dragStartGain = gain;
 /** Whether a gesture (drag interaction) is in progress. Prevents double-sending. */
 let gestureActive = false;
 let parameterSubscriptionId: number | undefined;
+let editorPageSubscriptionId: number | undefined;
 
 type ResizeResponse = {
   ok?: boolean;
@@ -137,6 +160,12 @@ const channel = new Channel<ParameterState>((message) => {
   }
 });
 
+const editorPageChannel = new Channel<EditorPageState>((message) => {
+  if (message && message.type === "editor-page") {
+    renderEditorPage(message.page);
+  }
+});
+
 // Initialization: fetch the current gain state, render the UI, and subscribe to changes.
 void (async () => {
   // Call the Rust "get_parameter_state" command via invoke().
@@ -151,6 +180,16 @@ void (async () => {
     channel,
   });
   parameterSubscriptionId = subscription.subscriptionId;
+
+  const initialPage = await invoke<EditorPageState>("get_editor_page");
+  renderEditorPage(initialPage.page);
+  const editorPageSubscription = await invoke<SubscribeParametersResponse>(
+    "subscribe_editor_page",
+    {
+      channel: editorPageChannel,
+    },
+  );
+  editorPageSubscriptionId = editorPageSubscription.subscriptionId;
 })();
 
 function clamp(value: number): number {
@@ -172,6 +211,25 @@ function render(state: ParameterState): void {
   dbLabel.textContent = state.text;
   const angle = gainToAngle(gain);
   indicator.style.transform = `rotate(${angle}deg)`;
+}
+
+function renderEditorPage(page: EditorPage): void {
+  const showControls = page === "controls";
+  tabControls.classList.toggle("is-active", showControls);
+  tabAbout.classList.toggle("is-active", !showControls);
+  tabControls.setAttribute("aria-selected", String(showControls));
+  tabAbout.setAttribute("aria-selected", String(!showControls));
+  pageControls.hidden = !showControls;
+  pageAbout.hidden = showControls;
+  pageControls.classList.toggle("is-active", showControls);
+  pageAbout.classList.toggle("is-active", !showControls);
+}
+
+function setEditorPage(page: EditorPage): void {
+  renderEditorPage(page);
+  void invoke<EditorPageState>("set_editor_page", { page })
+    .then((state) => renderEditorPage(state.page))
+    .catch(() => undefined);
 }
 
 // -----------------------------------------------------------------------
@@ -345,6 +403,16 @@ gainInput.addEventListener("keydown", (event) => {
 });
 gainInput.addEventListener("pointerdown", (event) => event.stopPropagation());
 
+tabControls.addEventListener("click", (event) => {
+  setEditorPage("controls");
+  restoreHostFocusIfNeeded(event.target);
+});
+
+tabAbout.addEventListener("click", (event) => {
+  setEditorPage("about");
+  restoreHostFocusIfNeeded(event.target);
+});
+
 {
   let dragStart:
     | {
@@ -436,8 +504,13 @@ gainInput.addEventListener("pointerdown", (event) => event.stopPropagation());
 window.addEventListener("beforeunload", () => {
   endGesture();
   if (parameterSubscriptionId !== undefined) {
-    void invoke("unsubscribe_parameters", {
+    void invoke("unsubscribe_gui_subscription", {
       subscriptionId: parameterSubscriptionId,
+    });
+  }
+  if (editorPageSubscriptionId !== undefined) {
+    void invoke("unsubscribe_gui_subscription", {
+      subscriptionId: editorPageSubscriptionId,
     });
   }
 });

@@ -28,8 +28,13 @@ unsafe extern "C" fn configurable_audio_ports_can_apply_configuration(
             log::warn!("configurable_audio_ports.can_apply: missing plugin instance");
             return false;
         };
-        // port layout は Processor の buffer view 契約を変える。別の active flag は持たず、
-        // 実際に Processor が存在するかどうかだけで「今は交渉不可」を判断する。
+        // port layout は Processor の buffer view 契約を変えるため、active 中の変更は拒否する。
+        //
+        // WRAC adapter では `start_processing()` / `stop_processing()` を active 判定の SoT に
+        // しない。wrapper によってはそれらを省略・遅延するため、ここでは実際の Processor の
+        // 有無と lifecycle callback 中かどうかだけを見る。これにより、plugin 実装側は
+        // `activate()` で layout を snapshot して Processor に渡せば、その Processor が生きている
+        // 間に layout store が書き換わらない前提を置ける。
         if instance.has_processor_or_busy() || instance.lifecycle_busy.load(Ordering::Acquire) {
             log::warn!(
                 "configurable_audio_ports.can_apply: rejected while processor/lifecycle is busy"
@@ -43,14 +48,7 @@ unsafe extern "C" fn configurable_audio_ports_can_apply_configuration(
             return false;
         };
 
-        let Some(mut core) = instance.core.try_write() else {
-            log::warn!(
-                "configurable_audio_ports.can_apply: core try_write failed thread={:?}",
-                std::thread::current().id()
-            );
-            return false;
-        };
-        let Some(configurable_audio_ports) = core.configurable_audio_ports() else {
+        let Some(configurable_audio_ports) = instance.configurable_audio_ports.as_ref() else {
             log::debug!(
                 "configurable_audio_ports.can_apply: plugin has no configurable audio ports"
             );
@@ -74,14 +72,6 @@ unsafe extern "C" fn configurable_audio_ports_apply_configuration(
             log::warn!("configurable_audio_ports.apply: missing plugin instance");
             return false;
         };
-        // host が `can_apply` を省略しても、Processor が古い port view を使っている間に
-        // layout を変えないよう `apply` 側でも同じ条件を確認する。
-        if instance.has_processor_or_busy() || instance.lifecycle_busy.load(Ordering::Acquire) {
-            log::warn!(
-                "configurable_audio_ports.apply: rejected while processor/lifecycle is busy"
-            );
-            return false;
-        }
         let Some(requests) = convert_requests(requests, request_count) else {
             log::warn!(
                 "configurable_audio_ports.apply: invalid request pointer count={request_count}"
@@ -89,17 +79,25 @@ unsafe extern "C" fn configurable_audio_ports_apply_configuration(
             return false;
         };
 
-        let Some(mut core) = instance.core.try_write() else {
-            log::warn!(
-                "configurable_audio_ports.apply: core try_write failed thread={:?}",
-                std::thread::current().id()
-            );
-            return false;
-        };
-        let Some(configurable_audio_ports) = core.configurable_audio_ports() else {
+        let Some(configurable_audio_ports) = instance.configurable_audio_ports.as_ref() else {
             log::debug!("configurable_audio_ports.apply: plugin has no configurable audio ports");
             return false;
         };
+
+        // host が `can_apply` を省略しても、Processor が古い port view を使っている間に
+        // layout を変えないよう `apply` 側でも同じ条件を確認する。確認と実際の apply は
+        // 同じ lifecycle guard の内側で行う。そうしないと、processor 不在確認の直後に
+        // `activate()` が古い layout を snapshot し、その後この callback が layout store を
+        // 書き換える race が残る。
+        let Some(_guard) = instance.try_enter_lifecycle() else {
+            log::warn!("configurable_audio_ports.apply: rejected while lifecycle is busy");
+            return false;
+        };
+        if instance.has_processor_or_busy() {
+            log::warn!("configurable_audio_ports.apply: rejected while processor is busy");
+            return false;
+        }
+
         match configurable_audio_ports.apply_audio_port_configuration(&requests) {
             Ok(()) => {
                 log::debug!(

@@ -34,7 +34,13 @@ impl ParameterEditQueue {
         events: &InputEvents<'_>,
     ) {
         for event in events.parameter_values() {
-            let _ = parameters.apply_parameter_value(event);
+            if let Err(error) = parameters.apply_parameter_value(event) {
+                log::warn!(
+                    "parameter_edits.apply_input: parameter apply failed parameter_id={} value={} error={error}",
+                    event.parameter_id,
+                    event.value
+                );
+            }
         }
     }
 
@@ -42,7 +48,7 @@ impl ParameterEditQueue {
         // audio callback 上で UI thread と待ち合わないため、queue が一瞬 busy なら次回
         // flush/process へ回す。host への request_flush は edit 追加時点で発行済み。
         let Some(mut pending) = self.pending.try_lock() else {
-            log::warn!("parameter_edits.drain: pending queue try_lock failed; retrying later");
+            log::debug!("parameter_edits.drain: pending queue try_lock failed; retrying later");
             return;
         };
 

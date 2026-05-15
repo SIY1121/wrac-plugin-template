@@ -71,6 +71,36 @@ body {
   color: rgba(247, 241, 231, 0.46);
 }
 
+.tabs {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tab {
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(247, 241, 231, 0.62);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab.is-active {
+  background: rgba(255, 184, 92, 0.16);
+  color: #fff6e5;
+}
+
+.page {
+  min-height: 278px;
+}
+
 .meter {
   margin-top: 12px;
   display: grid;
@@ -172,4 +202,46 @@ body {
 
 .resize-grip svg {
   pointer-events: none;
+}
+
+.about-page {
+  padding-top: 22px;
+}
+
+.about-page h1 {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.about-page dl {
+  margin: 26px 0 0;
+  display: grid;
+  gap: 16px;
+}
+
+.about-page div {
+  display: grid;
+  gap: 5px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.about-page dt,
+.about-page dd {
+  margin: 0;
+}
+
+.about-page dt {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #d9b985;
+}
+
+.about-page dd {
+  color: rgba(247, 241, 231, 0.78);
+  font-size: 13px;
+  line-height: 1.35;
 }

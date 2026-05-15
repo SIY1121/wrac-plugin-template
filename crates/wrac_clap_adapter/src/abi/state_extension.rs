@@ -13,9 +13,9 @@ pub(super) static STATE: clap_plugin_state = clap_plugin_state {
 
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 
-// state callback は host format により active 中にも来るため、adapter は core の
-// `&mut self` 呼び出しとして lifecycle mutation と直列化する。既存 Processor と共有する
-// state を audio-safe に更新する責務は、format 非依存の `PluginCore` 実装側に残す。
+// state callback は host format により active 中にも来る。ここで lifecycle 用の
+// `PluginCore` write lock を待つ/諦めると、project save が欠落し得るため、instance 作成時に
+// 固定した thread-safe state capability だけを呼ぶ。
 unsafe extern "C" fn state_save(plugin: *const clap_plugin, stream: *const clap_ostream) -> bool {
     ffi_bool(|| {
         if stream.is_null() {
@@ -26,17 +26,7 @@ unsafe extern "C" fn state_save(plugin: *const clap_plugin, stream: *const clap_
             log::warn!("state.save: missing plugin instance");
             return false;
         };
-        // wrapper によっては UI/project-load path の中で state callback と metadata query
-        // が再入する。Native CLAP の thread model 外で lock cycle を待つより、この state
-        // 操作だけ失敗させる。
-        let Some(mut core) = instance.core.try_write() else {
-            log::warn!(
-                "state.save: core try_write failed thread={:?}",
-                std::thread::current().id()
-            );
-            return false;
-        };
-        let Some(state_support) = core.state() else {
+        let Some(state_support) = instance.state.as_ref() else {
             log::debug!("state.save: plugin has no state support");
             return false;
         };
@@ -94,14 +84,7 @@ unsafe extern "C" fn state_load(plugin: *const clap_plugin, stream: *const clap_
             return false;
         };
 
-        let Some(mut core) = instance.core.try_write() else {
-            log::warn!(
-                "state.load: core try_write failed thread={:?}",
-                std::thread::current().id()
-            );
-            return false;
-        };
-        let Some(state_support) = core.state() else {
+        let Some(state_support) = instance.state.as_ref() else {
             log::debug!("state.load: plugin has no state support");
             return false;
         };
@@ -109,7 +92,6 @@ unsafe extern "C" fn state_load(plugin: *const clap_plugin, stream: *const clap_
             log::warn!("state.load: plugin restore_state failed: {error}");
             return false;
         }
-        drop(core);
         instance.parameter_edits.rescan_values();
         log::debug!("state.load: restored byte_len={len}");
         true

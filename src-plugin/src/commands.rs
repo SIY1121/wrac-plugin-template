@@ -12,9 +12,9 @@ use wrac_clap_adapter::{HostGuiResizeRequester, HostParameterEditNotifier};
 use wrac_wxp_gui::WxpGuiResizeHandle;
 use wxp::{Channel, WxpCommandHandler};
 
-use crate::gui::{GuiStateNotifier, GuiSubscriptionId, parameter_payload};
+use crate::gui::{GuiStateNotifier, GuiSubscriptionId, editor_page_payload, parameter_payload};
 use crate::plugin::{parameter_default_value, parameter_host_value, parameter_text_value};
-use crate::state::SharedState;
+use crate::state::{EditorPage, ProjectStateStore, SharedState};
 
 #[derive(Debug, Deserialize)]
 struct RequestGuiResizeRequest {
@@ -28,12 +28,35 @@ struct RequestGuiResizeRequest {
 /// { parameterId, value })` のような形でこれらの command を呼び出す。
 pub(crate) fn register_commands(
     command_handler: Rc<WxpCommandHandler>,
+    project_state: Arc<ProjectStateStore>,
     shared: Arc<SharedState>,
     gui_notifier: Arc<GuiStateNotifier>,
     host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
     host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
     gui_resize_handle: WxpGuiResizeHandle,
 ) {
+    // editor page は音に関係しない project state。audio thread が読む SharedState とは
+    // 別の store に置き、保存時に parameter snapshot と合成する。
+    {
+        let project_state = project_state.clone();
+        command_handler.register_sync("get_editor_page", move |_| {
+            Ok::<_, String>(editor_page_payload(project_state.editor_page()))
+        });
+    }
+
+    {
+        let project_state = project_state.clone();
+        let gui_notifier = gui_notifier.clone();
+        command_handler.register_sync("set_editor_page", move |ctx| {
+            let page = ctx.arg::<String>("page").map_err(|e| e.to_string())?;
+            let editor_page =
+                EditorPage::from_str(&page).ok_or_else(|| "invalid editor page".to_string())?;
+            project_state.set_editor_page(editor_page);
+            gui_notifier.notify_editor_page(editor_page);
+            Ok::<_, String>(editor_page_payload(editor_page))
+        });
+    }
+
     // 現在の parameter 値を取得する。GUI 起動直後の初期表示などに使う。
     {
         let shared = shared.clone();
@@ -150,12 +173,24 @@ pub(crate) fn register_commands(
         });
     }
 
+    {
+        let gui_notifier = gui_notifier.clone();
+        command_handler.register_sync("subscribe_editor_page", move |ctx| {
+            let channel = ctx.arg::<Channel>("channel").map_err(|e| e.to_string())?;
+            let subscription_id = gui_notifier.subscribe_editor_page(channel);
+            Ok::<_, String>(json!({
+                "ok": true,
+                "subscriptionId": subscription_id.get(),
+            }))
+        });
+    }
+
     // subscription を解除する。指定の id が登録されていなければ no-op。
     // id 指定にすることで、遅れて届いた古い cleanup が、後から始まった別の購読を
     // 誤って解除してしまう事故を防げる。
     {
         let gui_notifier = gui_notifier.clone();
-        command_handler.register_sync("unsubscribe_parameters", move |ctx| {
+        command_handler.register_sync("unsubscribe_gui_subscription", move |ctx| {
             let subscription_id = ctx
                 .arg::<u64>("subscriptionId")
                 .map_err(|e| e.to_string())?;
