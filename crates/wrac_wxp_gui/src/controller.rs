@@ -752,12 +752,9 @@ impl PluginGui for WxpGuiController {
     }
 
     fn set_size(&self, size: GuiSize) -> PluginResult<()> {
-        log::debug!(
-            "wxp controller: set_size called: requested_width={}, requested_height={}",
-            size.width,
-            size.height
-        );
         let size = self.layout.clamp_size(size);
+        let previous_size = self.layout.accepted_size();
+        let size_changed = previous_size.width != size.width || previous_size.height != size.height;
         let handle = {
             self.runtime
                 .lock()
@@ -765,15 +762,18 @@ impl PluginGui for WxpGuiController {
                 .as_ref()
                 .and_then(|session| session.handle.clone())
         };
+
+        // Several hosts resend the same accepted size while their outer editor
+        // window is settling. Reapplying identical WebView bounds does not change the
+        // contract, but it can make resize drags feel behind the pointer because the
+        // child view keeps receiving redundant geometry work. Still record the size
+        // below so reentrant `request_resize()` detection observes the host callback.
         if let Some(handle) = handle {
-            handle.set_size(size)?;
+            if size_changed {
+                handle.set_size(size)?;
+            }
         }
         self.layout.store_accepted_size(size);
-        log::debug!(
-            "wxp controller: set_size completed: applied_width={}, applied_height={}",
-            size.width,
-            size.height
-        );
         Ok(())
     }
 

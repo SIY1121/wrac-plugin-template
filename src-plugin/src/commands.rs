@@ -3,6 +3,8 @@
 //! Rust 側から見ると、ここが TypeScript UI との約束事になる。command 名や payload
 //! の形を変えるときは `src-gui` 側の `invoke(...)` / subscription と一緒に変更する。
 
+use std::cell::RefCell;
+use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,9 +19,88 @@ use crate::plugin::{parameter_default_value, parameter_host_value, parameter_tex
 use crate::state::{EditorPage, ProjectStateStore, SharedState};
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RequestGuiResizeRequest {
     width: f64,
     height: f64,
+    drag_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeginGuiResizeDragRequest {
+    drag_id: u64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EndGuiResizeDragRequest {
+    drag_id: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeResizeDrag {
+    drag_id: u64,
+    start_mouse_x: f64,
+    start_mouse_y: f64,
+    start_width: f64,
+    start_height: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GlobalMouseLocation {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreate(source: *const c_void) -> *mut c_void;
+    fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(cf: *const c_void);
+}
+
+fn global_mouse_location() -> Option<GlobalMouseLocation> {
+    #[cfg(target_os = "macos")]
+    {
+        // The resize grip lives inside the WebView, but the host owns the native
+        // editor window being resized. Hosts such as Logic can move/relayout that
+        // WebView during the same drag, which makes WebView pointer coordinates jump
+        // relative to the changing child view instead of tracking the physical mouse.
+        // Reading the OS cursor here gives the resize code one stable coordinate
+        // space: the desktop, outside both the WebView and the host's layout updates.
+        let event = unsafe { CGEventCreate(std::ptr::null()) };
+        if event.is_null() {
+            return None;
+        }
+        let location = unsafe { CGEventGetLocation(event) };
+        unsafe { CFRelease(event.cast()) };
+        Some(GlobalMouseLocation {
+            x: location.x,
+            y: location.y,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 /// WebView (フロントエンド) から呼べる command を [`WxpCommandHandler`] に登録する。
@@ -35,6 +116,14 @@ pub(crate) fn register_commands(
     host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
     gui_resize_handle: WxpGuiResizeHandle,
 ) {
+    // Split the resize drag into two responsibilities. JS owns the gesture lifetime
+    // because pointer capture/release is a browser concept, but Rust owns the resize
+    // coordinates on macOS because the browser's coordinate space is the surface the
+    // host is actively moving. The drag id ties those browser triggers to this native
+    // snapshot so every resize request can be recomputed from the original desktop
+    // cursor position instead of accumulating WebView-local pointer noise.
+    let native_resize_drag = Rc::new(RefCell::new(None::<NativeResizeDrag>));
+
     // editor page は音に関係しない project state。audio thread が読む SharedState とは
     // 別の store に置き、保存時に parameter snapshot と合成する。
     {
@@ -206,21 +295,74 @@ pub(crate) fn register_commands(
         Ok::<_, String>(json!({ "ok": true }))
     });
 
-    command_handler.register_sync("request_gui_resize", move |ctx| {
-        let request = ctx
-            .arg::<RequestGuiResizeRequest>("request")
-            .map_err(|e| e.to_string())?;
-        let size = gui_resize_handle
-            .request_resize(
-                wxp::dpi::LogicalSize::new(request.width, request.height),
-                ctx.webview(),
-                host_gui_resize_requester.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok::<_, String>(json!({
-            "ok": true,
-            "width": size.width,
-            "height": size.height,
-        }))
-    });
+    {
+        let native_resize_drag = native_resize_drag.clone();
+        command_handler.register_sync("begin_gui_resize_drag", move |ctx| {
+            let request = ctx
+                .arg::<BeginGuiResizeDragRequest>("request")
+                .map_err(|e| e.to_string())?;
+            let Some(mouse) = global_mouse_location() else {
+                return Ok::<_, String>(json!({ "ok": false }));
+            };
+
+            *native_resize_drag.borrow_mut() = Some(NativeResizeDrag {
+                drag_id: request.drag_id,
+                start_mouse_x: mouse.x,
+                start_mouse_y: mouse.y,
+                start_width: request.width,
+                start_height: request.height,
+            });
+            Ok::<_, String>(json!({ "ok": true }))
+        });
+    }
+
+    {
+        let native_resize_drag = native_resize_drag.clone();
+        command_handler.register_sync("end_gui_resize_drag", move |ctx| {
+            let request = ctx
+                .arg::<EndGuiResizeDragRequest>("request")
+                .map_err(|e| e.to_string())?;
+            let mut drag = native_resize_drag.borrow_mut();
+            if drag
+                .as_ref()
+                .is_some_and(|drag| drag.drag_id == request.drag_id)
+            {
+                *drag = None;
+            }
+            Ok::<_, String>(json!({ "ok": true }))
+        });
+    }
+
+    {
+        let native_resize_drag = native_resize_drag.clone();
+        command_handler.register_sync("request_gui_resize", move |ctx| {
+            let request = ctx
+                .arg::<RequestGuiResizeRequest>("request")
+                .map_err(|e| e.to_string())?;
+
+            let native_request = request.drag_id.and_then(|drag_id| {
+                let drag = native_resize_drag.borrow();
+                let drag = drag.as_ref().filter(|drag| drag.drag_id == drag_id)?;
+                let mouse = global_mouse_location()?;
+                Some((
+                    drag.start_width + (mouse.x - drag.start_mouse_x),
+                    drag.start_height + (mouse.y - drag.start_mouse_y),
+                ))
+            });
+
+            let (width, height) = native_request.unwrap_or((request.width, request.height));
+            let size = gui_resize_handle
+                .request_resize(
+                    wxp::dpi::LogicalSize::new(width, height),
+                    ctx.webview(),
+                    host_gui_resize_requester.as_ref(),
+                )
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>(json!({
+                "ok": true,
+                "width": size.width,
+                "height": size.height,
+            }))
+        });
+    }
 }
