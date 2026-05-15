@@ -27,7 +27,9 @@ use wrac_wxp_gui::WxpGuiController;
 
 use crate::audio::WracGainAudioProcessor;
 use crate::gui::{GuiStateNotifier, create_gui_integration};
-use crate::state::SharedState;
+use crate::state::{
+    EditorPage, ParameterStateSnapshot, ProjectState, ProjectStateStore, SharedState,
+};
 
 // plugin を識別する reverse-DNS 形式の ID。DAW が plugin を一意に判別するために
 // 使うので、自分の plugin を作るときはここを必ず変更する。
@@ -93,32 +95,37 @@ pub(crate) struct WracGainPlugin {
 }
 
 struct WracGainStateSupport {
+    project_state: Arc<ProjectStateStore>,
     shared: Arc<SharedState>,
     gui_notifier: Arc<GuiStateNotifier>,
 }
 
 /// DAW project に保存される plugin state の serialize 形式。
 ///
-/// `serde_json` で JSON にして bytes として host に渡し、復元時は逆に読み戻す。
-/// gain の値だけを persist する単純な構造だが、新しい parameter を追加する際は
-/// この struct を拡張して `restore_state` で欠落 field を default 値に埋めると
-/// 古い project ファイルとの互換性を保ちやすい。
+/// `serde_json` で JSON にして bytes として host に渡し、復元時は逆に読み戻す。realtime な
+/// parameter は [`SharedState`] から、editor-only state は [`ProjectStateStore`] から snapshot
+/// して、この保存形式へ合成する。
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SavedPluginState {
     pub(crate) gain: f32,
     #[serde(default)]
     pub(crate) bypass: bool,
+    #[serde(default)]
+    pub(crate) editor_page: EditorPage,
 }
 
 impl WracGainPlugin {
     pub(crate) fn new(context: PluginCoreContext) -> Self {
         let shared = Arc::new(SharedState::new());
+        let project_state = Arc::new(ProjectStateStore::new());
         let gui = create_gui_integration(
+            project_state.clone(),
             shared.clone(),
             context.host_parameter_edit_notifier,
             context.host_gui_resize_requester,
         );
         let state_support = Arc::new(WracGainStateSupport {
+            project_state: project_state.clone(),
             shared: shared.clone(),
             gui_notifier: gui.notifier.clone(),
         });
@@ -383,14 +390,18 @@ impl PluginParameters for WracGainPlugin {
 // JSON にしておく (人が読めるとデバッグが楽)。
 impl PluginStateSupport for WracGainStateSupport {
     fn save_state(&self) -> PluginResult<PluginState> {
+        let project = self.project_state.snapshot();
+        let params = self.shared.snapshot_parameters();
         log::debug!(
-            "saving plugin state: gain={}, bypass={}",
-            self.shared.gain(),
-            self.shared.bypass()
+            "saving plugin state: gain={}, bypass={}, editor_page={}",
+            params.gain,
+            params.bypass,
+            project.editor_page.as_str()
         );
         let bytes = serde_json::to_vec(&SavedPluginState {
-            gain: self.shared.gain(),
-            bypass: self.shared.bypass(),
+            gain: params.gain,
+            bypass: params.bypass,
+            editor_page: project.editor_page,
         })
         .map_err(|_| PluginError::InvalidState)?;
         Ok(PluginState { bytes })
@@ -400,14 +411,19 @@ impl PluginStateSupport for WracGainStateSupport {
         log::debug!("restoring plugin state: byte_count={}", state.bytes.len());
         let state: SavedPluginState =
             serde_json::from_slice(&state.bytes).map_err(|_| PluginError::InvalidState)?;
-        let gain = self
-            .shared
-            .set_parameter_value(PARAM_GAIN_ID, state.gain as f64)
-            .ok_or(PluginError::InvalidParameter)?;
-        self.shared
-            .set_parameter_value(PARAM_BYPASS_ID, f64::from(state.bypass))
-            .ok_or(PluginError::InvalidParameter)?;
-        self.gui_notifier.notify_parameter(PARAM_GAIN_ID, gain);
+        let project = ProjectState {
+            editor_page: state.editor_page,
+        };
+        self.project_state.commit(project);
+        self.shared.restore_parameters(ParameterStateSnapshot {
+            gain: state.gain,
+            bypass: state.bypass,
+        });
+        self.gui_notifier
+            .notify_parameter(PARAM_GAIN_ID, self.shared.gain());
+        self.gui_notifier
+            .notify_parameter(PARAM_BYPASS_ID, f32::from(self.shared.bypass()));
+        self.gui_notifier.notify_editor_page(project.editor_page);
         Ok(())
     }
 }

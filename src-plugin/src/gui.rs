@@ -37,7 +37,7 @@ use wxp::{
 
 use crate::commands::register_commands;
 use crate::plugin::{PARAM_GAIN_ID, PLUGIN_ID, parameter_value_text};
-use crate::state::SharedState;
+use crate::state::{EditorPage, ProjectStateStore, SharedState};
 
 // GUI window のサイズ範囲 (pixel)。host は initial size でウインドウを開き、
 // ユーザーがリサイズしたときは min..=max の範囲にクランプされる。
@@ -70,6 +70,7 @@ pub(crate) struct GuiIntegration {
 
 #[derive(Clone)]
 struct GuiRuntimeDependencies {
+    project_state: Arc<ProjectStateStore>,
     shared: Arc<SharedState>,
     gui_notifier: Arc<GuiStateNotifier>,
     host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
@@ -82,6 +83,7 @@ struct GuiRuntimeDependencies {
 /// `plugin.rs` 側には GUI window のサイズ制約や WebView runtime の詳細を置かず、
 /// host-facing な core 実装から GUI 固有の組み立てを切り離す。
 pub(crate) fn create_gui_integration(
+    project_state: Arc<ProjectStateStore>,
     shared: Arc<SharedState>,
     host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
     host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
@@ -95,6 +97,7 @@ pub(crate) fn create_gui_integration(
         },
     );
     let runtime_dependencies = GuiRuntimeDependencies {
+        project_state,
         shared,
         gui_notifier: notifier.clone(),
         host_parameter_edit_notifier,
@@ -164,6 +167,7 @@ impl GuiSubscriptionId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GuiSubscriptionKind {
     Parameters,
+    EditorPage,
 }
 
 impl GuiStateNotifier {
@@ -175,13 +179,21 @@ impl GuiStateNotifier {
     }
 
     pub(crate) fn subscribe_parameters(&self, channel: Channel) -> GuiSubscriptionId {
+        self.subscribe(GuiSubscriptionKind::Parameters, channel)
+    }
+
+    pub(crate) fn subscribe_editor_page(&self, channel: Channel) -> GuiSubscriptionId {
+        self.subscribe(GuiSubscriptionKind::EditorPage, channel)
+    }
+
+    fn subscribe(&self, kind: GuiSubscriptionKind, channel: Channel) -> GuiSubscriptionId {
         // id は Rust 側で採番する。wxp の Channel id とは独立させることで、
         // transport (Channel) と購読 lifecycle を別々に管理できる。
         let id = GuiSubscriptionId(self.next_subscription_id.fetch_add(1, Ordering::Relaxed));
         self.subscriptions.lock().insert(
             id,
             GuiSubscription {
-                kind: GuiSubscriptionKind::Parameters,
+                kind,
                 sender: RunLoop::sender(),
                 channel,
             },
@@ -198,13 +210,27 @@ impl GuiStateNotifier {
     }
 
     pub(crate) fn notify_parameter(&self, parameter_id: u32, value: f32) {
+        self.notify(
+            GuiSubscriptionKind::Parameters,
+            parameter_payload(parameter_id, value),
+        );
+    }
+
+    pub(crate) fn notify_editor_page(&self, editor_page: EditorPage) {
+        self.notify(
+            GuiSubscriptionKind::EditorPage,
+            editor_page_payload(editor_page),
+        );
+    }
+
+    fn notify(&self, kind: GuiSubscriptionKind, payload: serde_json::Value) {
         // lock を握ったまま送信しない。送り先の処理が再び notifier を触りに来ても
         // deadlock しないように、配信対象を先に clone してから lock を離す。
         let subscriptions: Vec<_> = self
             .subscriptions
             .lock()
             .values()
-            .filter(|subscription| subscription.kind == GuiSubscriptionKind::Parameters)
+            .filter(|subscription| subscription.kind == kind)
             .cloned()
             .collect();
         if subscriptions.is_empty() {
@@ -212,7 +238,6 @@ impl GuiStateNotifier {
             return;
         }
 
-        let payload = parameter_payload(parameter_id, value);
         for subscription in subscriptions {
             let payload = payload.clone();
             // WebView channel は GUI runtime と同じ UI thread 上で扱う必要がある。
@@ -235,6 +260,13 @@ pub(crate) fn parameter_payload(parameter_id: u32, value: f32) -> serde_json::Va
         "parameterId": parameter_id,
         "value": value,
         "text": parameter_value_text(parameter_id, value as f64).unwrap_or_else(|_| value.to_string()),
+    })
+}
+
+pub(crate) fn editor_page_payload(editor_page: EditorPage) -> serde_json::Value {
+    json!({
+        "type": "editor-page",
+        "page": editor_page.as_str(),
     })
 }
 
@@ -286,6 +318,7 @@ impl WracGainGuiRuntime {
         log::debug!("creating GUI runtime: registering commands");
         register_commands(
             command_handler.clone(),
+            dependencies.project_state.clone(),
             dependencies.shared.clone(),
             dependencies.gui_notifier.clone(),
             dependencies.host_parameter_edit_notifier,

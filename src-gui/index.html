@@ -18,15 +18,38 @@
           <p class="eyebrow">WRAC Gain</p>
           <p class="version" id="build-info"></p>
         </div>
-        <div class="meter">
-          <button class="value" id="gain-db" type="button">0.0 dB</button>
-          <input class="value value-input" id="gain-input" type="text" hidden />
-        </div>
-        <section class="knob-zone">
-          <button class="knob" id="gain-knob" type="button" aria-label="Gain knob">
-            <div class="knob-track"></div>
-            <div class="knob-indicator" id="knob-indicator"></div>
-          </button>
+        <nav class="tabs" aria-label="Editor pages">
+          <button class="tab is-active" id="tab-controls" type="button" data-page="controls">Controls</button>
+          <button class="tab" id="tab-about" type="button" data-page="about">About</button>
+        </nav>
+        <section class="page is-active" id="page-controls">
+          <div class="meter">
+            <button class="value" id="gain-db" type="button">0.0 dB</button>
+            <input class="value value-input" id="gain-input" type="text" hidden />
+          </div>
+          <section class="knob-zone">
+            <button class="knob" id="gain-knob" type="button" aria-label="Gain knob">
+              <div class="knob-track"></div>
+              <div class="knob-indicator" id="knob-indicator"></div>
+            </button>
+          </section>
+        </section>
+        <section class="page about-page" id="page-about" hidden>
+          <h1>WRAC Gain</h1>
+          <dl>
+            <div>
+              <dt>Vendor</dt>
+              <dd>Your Company</dd>
+            </div>
+            <div>
+              <dt>Format</dt>
+              <dd>CLAP wrapped to AU/VST3</dd>
+            </div>
+            <div>
+              <dt>Processing</dt>
+              <dd>Sample-accurate gain with bypass</dd>
+            </div>
+          </dl>
         </section>
       </main>
       <button class="resize-grip" id="resize-grip" type="button" aria-label="Resize plugin window">
