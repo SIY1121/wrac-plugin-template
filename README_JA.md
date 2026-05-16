@@ -44,6 +44,13 @@ cargo xtask validate
 cargo xtask install
 ```
 
+Standalone app はビルド後に起動できます:
+
+```bash
+cargo xtask build --target=standalone
+cargo xtask launch
+```
+
 対応フォーマット:
 
 | OS | `cargo xtask build` の対象 | `cargo xtask validate` の対象 |

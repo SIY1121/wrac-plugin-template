@@ -44,6 +44,13 @@ cargo xtask validate
 cargo xtask install
 ```
 
+Launch the standalone app after building it:
+
+```bash
+cargo xtask build --target=standalone
+cargo xtask launch
+```
+
 Supported formats:
 
 | OS | `cargo xtask build` targets | `cargo xtask validate` targets |
