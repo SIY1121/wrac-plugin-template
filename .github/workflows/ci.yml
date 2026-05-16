@@ -61,7 +61,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtkmm-3.0-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtkmm-3.0-dev libx11-dev libasound2-dev
 
       - name: Show Rust version
         run: |
@@ -87,20 +87,18 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            targets: clap,vst3
             validate-targets: clap,vst3
             verify: |
               test -f "target/wrac/plugins/release/WRAC Gain.clap"
               test -d "target/wrac/plugins/release/WRAC Gain.vst3"
+              test -x "target/wrac/standalone/release/WRAC Gain Standalone"
           - os: windows-latest
-            targets: clap,vst3,standalone
             validate-targets: clap,vst3
             verify: |
               test -f "target/wrac/plugins/release/WRAC Gain.clap"
               test -d "target/wrac/plugins/release/WRAC Gain.vst3"
               test -f "target/wrac/standalone/release/WRAC Gain Standalone.exe"
           - os: macos-latest
-            targets: clap,vst3,au,standalone
             validate-targets: clap,vst3,au
             verify: |
               test -d "target/wrac/plugins/release/WRAC Gain.clap"
@@ -118,7 +116,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtkmm-3.0-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtkmm-3.0-dev libx11-dev libasound2-dev
 
       - name: Add msbuild to PATH
         if: runner.os == 'Windows'
@@ -142,8 +140,8 @@ jobs:
             /usr/bin/auval -h || true
           fi
 
-      - name: Build plugin artifacts
-        run: cargo xtask build --release --target=${{ matrix.targets }}
+      - name: Build all supported artifacts
+        run: cargo xtask build --release
 
       - name: Validate plugin artifacts
         if: matrix.validate-targets != ''

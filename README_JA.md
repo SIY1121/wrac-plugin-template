@@ -46,11 +46,11 @@ cargo xtask install
 
 対応フォーマット:
 
-| OS | 対応フォーマット |
-|----|---------------------------|
-| macOS | CLAP / VST3 / AU / Standalone |
-| Windows | CLAP / VST3 / Standalone |
-| Linux | CLAP / VST3 / Standalone |
+| OS | `cargo xtask build` の対象 | `cargo xtask validate` の対象 |
+|----|---------------------------|-------------------------------|
+| macOS | CLAP / VST3 / AU / Standalone | CLAP / VST3 / AU |
+| Windows | CLAP / VST3 / Standalone | CLAP / VST3 |
+| Linux | CLAP / VST3 / Standalone | CLAP / VST3 |
 
 `--target` オプションには `clap`、`vst3`、`au`、`standalone` をカンマ区切りで指定できます。
 
