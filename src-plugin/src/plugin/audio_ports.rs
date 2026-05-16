@@ -6,14 +6,15 @@ use wrac_clap_adapter::{
     PluginConfigurableAudioPorts, PluginError, PluginResult,
 };
 
-/// host と交渉した audio layout の SoT。**non-realtime 専用**。
+/// Source of truth for the audio layout negotiated with the host. **Non-realtime only.**
 ///
-/// host の port query と configurable-audio-ports apply がここを読み書きするが、
-/// `Processor::process()` は読まない。audio thread から RwLock を読むと priority
-/// inversion を招くため、layout は「次に activate する processor の設定」として扱い、
-/// `activate()` で snapshot して渡す ([`WracGainAudioProcessor`](crate::audio::WracGainAudioProcessor) 参照)。sidechain や
-/// ambisonics など複雑な layout でも、この「store に記録 → activate で snapshot」の
-/// 形は同じ。
+/// Host port queries and configurable-audio-ports apply operations read/write this store,
+/// but `Processor::process()` never does. Reading an `RwLock` from the audio thread risks
+/// priority inversion, so the layout is treated as "the configuration for the next
+/// processor to be activated" and snapshotted in `activate()` before being passed in
+/// (see [`WracGainAudioProcessor`](crate::audio::WracGainAudioProcessor)). The same
+/// "record in store → snapshot at activate" pattern applies to complex layouts such as
+/// sidechain or ambisonics.
 pub(super) struct AudioLayoutStore {
     channel_count: RwLock<u32>,
 }
@@ -44,8 +45,8 @@ impl WracGainAudioPorts {
     }
 }
 
-// gain なので main in / main out が 1 つずつ。channel 数は configurable audio
-// ports 経由で host が変更できる。
+// Gain has one main input and one main output. Channel count can be changed by the
+// host via configurable audio ports.
 impl PluginAudioPorts for WracGainAudioPorts {
     fn audio_port_count(&self, _is_input: bool) -> u32 {
         1
@@ -81,11 +82,12 @@ impl PluginAudioPorts for WracGainAudioPorts {
     }
 }
 
-/// host からの layout 変更要求を [`AudioLayoutStore`] に反映する capability。
+/// Capability that applies host-requested layout changes to [`AudioLayoutStore`].
 ///
-/// `&self` で更新するのは、adapter が `&mut self` lock を通らずに呼ぶため
-/// ([`WracGainPlugin`](super::WracGainPlugin) 参照)。active 中に変えてよい訳ではなく、adapter が
-/// Processor 不在 (inactive) のときだけ呼ぶことで安全を保証している。
+/// Mutation via `&self` is intentional: the adapter calls this without acquiring the
+/// `&mut self` lock (see [`WracGainPlugin`](super::WracGainPlugin)). This does not mean
+/// changes are allowed while active — the adapter enforces that this is only called when
+/// no `Processor` exists (inactive).
 pub(super) struct WracGainConfigurableAudioPorts {
     layout: Arc<AudioLayoutStore>,
 }
@@ -96,8 +98,8 @@ impl WracGainConfigurableAudioPorts {
     }
 }
 
-// 例: host が stereo→mono を提案 → 受理可否を `can_apply_*` で答え、
-// 実反映を `apply_*` で行う。
+// Example: host proposes stereo→mono → answer feasibility via `can_apply_*`,
+// commit the change via `apply_*`.
 impl PluginConfigurableAudioPorts for WracGainConfigurableAudioPorts {
     fn can_apply_audio_port_configuration(
         &self,
@@ -111,8 +113,8 @@ impl PluginConfigurableAudioPorts for WracGainConfigurableAudioPorts {
         &self,
         requests: &[AudioPortConfigurationRequest],
     ) -> PluginResult<()> {
-        // adapter 側が Processor の存在中は configuration apply を拒否する。ここは非 RT
-        // query 専用 store だけを更新し、audio thread は activate 時の snapshot を使う。
+        // The adapter rejects configuration apply while a Processor exists. This updates
+        // only the non-RT query store; the audio thread uses the snapshot captured at activate.
         let previous_channel_count = self.layout.channel_count();
         let channel_count =
             resolve_audio_channel_count(previous_channel_count, requests).ok_or_else(|| {
@@ -139,10 +141,11 @@ fn audio_port_type(channel_count: u32) -> AudioPortType {
     }
 }
 
-/// port 構成要求を解析し、受理できるなら新しい channel 数を返す。
+/// Parses port configuration requests and returns the new channel count if acceptable.
 ///
-/// 入出力が対称な main port のみ受理する。sidechain のような非対称構成は
-/// 製品固有の routing 意味論が必要で、汎用 gain サンプルでは定義できないため。
+/// Only symmetric main-port configurations (same channel count for input and output) are
+/// accepted. Asymmetric configurations such as sidechain require product-specific routing
+/// semantics that cannot be defined in a generic gain sample.
 fn resolve_audio_channel_count(
     current_channel_count: u32,
     requests: &[AudioPortConfigurationRequest],
@@ -163,7 +166,7 @@ fn resolve_audio_channel_count(
         }
     }
 
-    // 入出力で channel 数が一致しているときだけ受理する。
+    // Accept only when input and output channel counts match.
     (input_channel_count == output_channel_count).then_some(input_channel_count)
 }
 
@@ -177,7 +180,7 @@ fn is_supported_audio_port_request(request: &AudioPortConfigurationRequest) -> b
 
 #[cfg(test)]
 mod tests {
-    // host や CLAP runtime 無しで検証できる純粋ロジックの単体テスト例。
+    // Unit test examples for pure logic that can be verified without a host or CLAP runtime.
 
     use wrac_clap_adapter::{AudioPortConfigurationRequest, AudioPortType};
 

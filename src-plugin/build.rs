@@ -1,8 +1,9 @@
-//! release build 時に `src-gui/dist` を 1 つの zip にまとめて `OUT_DIR` に出力する build script。
+//! Build script that bundles `src-gui/dist` into a single zip and writes it to `OUT_DIR`
+//! for release builds.
 //!
-//! 出力された zip は `gui.rs` で `include_bytes!` により plugin バイナリへ
-//! 埋め込まれ、実行時に WebView が `wxp-plugin://` scheme として配信する。
-//! debug build では Vite dev server を使うので、このスクリプトは何もしない。
+//! The resulting zip is embedded into the plugin binary via `include_bytes!` in `gui.rs`
+//! and served at runtime by the WebView under the `wxp-plugin://` scheme.
+//! In debug builds Vite's dev server is used instead, so this script does nothing.
 
 use std::env;
 use std::fs::{self, File};
@@ -14,7 +15,7 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 fn main() {
-    // frontend ソースが変わったら再ビルドする (zip を作り直す) ように Cargo に伝える。
+    // Tell Cargo to rebuild (regenerate the zip) whenever frontend source files change.
     println!("cargo:rerun-if-changed=../src-gui/index.html");
     println!("cargo:rerun-if-changed=../src-gui/src");
     println!("cargo:rerun-if-changed=../src-gui/package.json");
@@ -23,9 +24,10 @@ fn main() {
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let manifest_path = manifest_dir.join("Cargo.toml");
-    // Cargo.toml の [package.metadata.wrac] を plugin identity の SoT にする。
-    // descriptor / AUv2 codes / GUI / xtask が別々の値を持つと、テンプレートを
-    // 改名した時に一部 artifact だけ古い名前で出るため、Rust へ compile-time env で渡す。
+    // Make [package.metadata.wrac] in Cargo.toml the single source of truth for plugin
+    // identity. If descriptor, AUv2 codes, GUI, and xtask each held their own values, a
+    // template rename could leave some artifacts with the old name, so pass them to Rust
+    // as compile-time env vars.
     let metadata = read_wrac_metadata(&manifest_path).expect("failed to read WRAC metadata");
     println!("cargo:rustc-env=WRAC_PLUGIN_ID={}", metadata.plugin_id);
     println!("cargo:rustc-env=WRAC_PLUGIN_NAME={}", metadata.plugin_name);
@@ -43,7 +45,7 @@ fn main() {
         metadata.auv2_manufacturer_code
     );
 
-    // debug build 時は zip を作らない (Vite dev server を使うため)。
+    // Skip zip creation for debug builds (the Vite dev server is used instead).
     if env::var("PROFILE").ok().as_deref() != Some("release") {
         return;
     }
@@ -56,7 +58,7 @@ fn main() {
     let out_zip =
         PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("wrac_gain_plugin_gui.zip");
 
-    // release build の前に `npm run build` を回し忘れていた場合は早めに止める。
+    // Fail early if `npm run build` was not run before the release build.
     if !gui_dist_dir.exists() {
         panic!(
             "frontend build output was not found at {}. Run `npm install && npm run build` in src-gui before release builds.",
@@ -150,7 +152,7 @@ fn validate_four_ascii(key: &str, value: &str) -> io::Result<()> {
     }
 }
 
-/// `src_dir` 以下を丸ごと deflate 圧縮の zip にまとめて `out_zip` に書き出す。
+/// Compresses everything under `src_dir` into a deflate-compressed zip and writes it to `out_zip`.
 fn create_zip(src_dir: &Path, out_zip: &Path) -> io::Result<()> {
     let file = File::create(out_zip)?;
     let mut zip = ZipWriter::new(file);
@@ -161,10 +163,10 @@ fn create_zip(src_dir: &Path, out_zip: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// directory を再帰的に walk して zip へ追加する。
+/// Recursively walks a directory and adds its contents to the zip.
 ///
-/// build を decisive (= 同じ入力なら常に同じ出力) にするため、entry を
-/// path 順に sort してから処理する。
+/// Entries are sorted by path before processing to make the build deterministic
+/// (same inputs always produce the same output).
 fn add_directory_contents(
     root: &Path,
     current: &Path,
@@ -179,7 +181,7 @@ fn add_directory_contents(
         let relative = path
             .strip_prefix(root)
             .expect("walked path must be inside root");
-        // zip 内部は OS 非依存の `/` 区切りに揃える (Windows 対策)。
+        // Normalise internal zip paths to the OS-independent `/` separator (Windows fix).
         let zip_path = relative.to_string_lossy().replace('\\', "/");
 
         if path.is_dir() {

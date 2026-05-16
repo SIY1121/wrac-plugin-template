@@ -1,12 +1,5 @@
 # WRAC Plugin Template
 
-⚠️ Currently in **pre-release testing** for the official launch.
-- Feedback is welcome via issues, discussions, DM, email, or any other means.
-- The scope is currently intentionally limited to acquaintances and stakeholders.
-- Official launch is planned for early May 2026. Your shares and support at that time would be greatly appreciated!
-
----
-
 A template for implementing audio plugins with the WRAC stack.
 You can copy this repository as a starting point for new projects.
 
@@ -28,37 +21,47 @@ The WRAC stack is a technology stack for audio plugin development, built around 
 The code in this repository implements a simple plugin called WRAC Gain.
 It is also structured so it can be used as a template.
 
+- CLAP plugin implementation in Rust using [clap-sys](https://github.com/micahrj/clap-sys)
 - WebView GUI implementation using [wxp](https://github.com/novonotes/wxp)
-- CLAP plugin implementation in Rust using `clap-sys`
-- VST3 and AU plugin builds via [clap-wrapper](https://github.com/free-audio/clap-wrapper)
+- VST3 / AU / Standalone builds via [clap-wrapper](https://github.com/free-audio/clap-wrapper)
 
 ## Build
 
+Common commands:
+
 ```bash
+# Debug build for all formats
 cargo xtask build
+# Release build for all formats
 cargo xtask build --release
+# Debug build for VST3 only
 cargo xtask build --target=vst3
-cargo xtask build --target=au,standalone
+# Release build for AU and Standalone
+cargo xtask build --target=au,standalone --release
+# Validate built plugins
 cargo xtask validate
+# Install built plugins
 cargo xtask install
 ```
 
-`cargo xtask build` builds every target supported by the current OS:
-CLAP/VST3/AU/standalone on macOS and CLAP/VST3/standalone on Windows and Linux.
-Use `build --target` with a comma-separated list of `clap`, `vst3`,
-`au`, and `standalone` to build a smaller set. `install` and `uninstall` accept
-plugin formats only: `clap`, `vst3`, and `au`. `install --scope` accepts `user`
-or `system`; `uninstall --scope` accepts `user`, `system`, or `all`.
+Supported formats:
 
-Plugin artifacts are staged under `target/wrac/plugins/<profile>/`, and
-standalone apps are staged under `target/wrac/standalone/<profile>/`. On macOS,
-`cargo xtask validate` runs clap-validator, the VST3 validator, and
-`auval -v aufx WtGn YrCo`. On Windows and Linux, validation runs clap-validator
-and the VST3 validator. CLAP validation downloads clap-validator 0.3.2 into
-`target/tools` when needed. AU validation installs the built component under
-`~/Library/Audio/Plug-Ins/Components/` and fails if the same bundle exists under
-`/Library/Audio/Plug-Ins/Components/`.
+| OS | `cargo xtask build` targets | `cargo xtask validate` targets |
+|----|-----------------------------|-------------------------------|
+| macOS | CLAP / VST3 / AU / Standalone | CLAP / VST3 / AU |
+| Windows | CLAP / VST3 / Standalone | CLAP / VST3 |
+| Linux | CLAP / VST3 / Standalone | CLAP / VST3 |
 
+The `--target` option accepts `clap`, `vst3`, `au`, and `standalone` as comma-separated values.
+
+For detailed usage:
+
+```bash
+# Overall help
+cargo xtask --help
+# Subcommand help
+cargo xtask build --help
+```
 
 ## Setting Up a New Project
 
@@ -73,8 +76,12 @@ Even a quick comment like **"Works on Logic Pro 10.7"** is incredibly helpful fo
 Feel free to drop a quick note here:
 👉 [DAW Compatibility Reports](https://github.com/novonotes/wrac-plugin-template/discussions/6)
 
+## Notes
+
+This repository is intended as an implementation example and starting point, not a general-purpose framework. Future changes will not provide API backwards compatibility or migration support.
+
 ## Reference
 
-For usage of the wxp crate, see the [wxp README](https://github.com/novonotes/wxp/tree/main/crates/wxp).
-
 For known DAW compatibility status, see the [DAW Compatibility Matrix](https://github.com/novonotes/wrac-plugin-template/wiki/DAW-Compatibility-Matrix).
+
+For usage of the wxp crate, see the [wxp README](https://github.com/novonotes/wxp/tree/main/crates/wxp).

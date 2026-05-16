@@ -1,16 +1,16 @@
 # wrac_wxp_gui
 
-`wrac_wxp_gui` は `wrac_clap_adapter` の `PluginGui` と wxp WebView runtime を接続する helper crate です。
+`wrac_wxp_gui` is a helper crate that connects `wrac_clap_adapter`'s `PluginGui` with the wxp WebView runtime.
 
-責務は 2 つです。1 つは CLAP の `clap_window_t` 由来の `ClapWindow` を `raw-window-handle` の型に変換して wxp に渡すこと、もう 1 つは特定の thread からしか操作できない WebView runtime を host UI thread 上に保持することです。CLAP C ABI とのインタラクションはこのクレートの責務ではなく、wrac_clap_adapter の責務です。
+It has two responsibilities: converting the `ClapWindow` derived from CLAP's `clap_window_t` into `raw-window-handle` types for passing to wxp, and holding a WebView runtime (which can only be operated from a specific thread) on the host UI thread. Interaction with the CLAP C ABI is the responsibility of `wrac_clap_adapter`, not this crate.
 
-## 前提
+## Assumptions
 
-- `set_parent()` で UI thread を固定し、GUI runtime はその thread 上で `show()` 時に作る
-- 1 process 内の host UI thread は単一とみなす
-- 複数 UI thread を使う host は unsupported として失敗させる
-- floating window はこの helper では扱わない
-- 汎用的なフレームワークではなく実装例の一部です。今後の変更に伴う、API の後方互換性やマイグレーションサポートは提供しません。
+- `set_parent()` fixes the UI thread, and the GUI runtime is created on that thread when `show()` is called
+- A single host UI thread per process is assumed
+- Hosts that use multiple UI threads are treated as unsupported and will fail
+- Floating windows are not handled by this helper
+- This is part of an implementation example, not a general-purpose framework. Future changes will not provide API backwards compatibility or migration support.
 
-## 参考
-wxp クレートの使い方は [wxp の README](https://github.com/novonotes/wxp/tree/main/crates/wxp) に記載しています。
+## Reference
+For wxp crate usage, see the [wxp README](https://github.com/novonotes/wxp/tree/main/crates/wxp).

@@ -1,7 +1,8 @@
-//! wxp WebView GUI を `wrac_clap_adapter::PluginGui` として公開する helper。
+//! Helper that exposes the wxp WebView GUI as a `wrac_clap_adapter::PluginGui`.
 //!
-//! CLAP ABI を知る必要がある部分は `wrac_clap_adapter` に残し、この crate は
-//! window handle の toolkit 変換と GUI runtime の thread affinity だけを持つ。
+//! Parts that need to know about the CLAP ABI remain in `wrac_clap_adapter`. This crate
+//! is responsible only for toolkit conversion of window handles and the thread affinity
+//! of the GUI runtime.
 
 mod controller;
 mod dpi;

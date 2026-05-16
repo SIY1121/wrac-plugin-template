@@ -1,8 +1,8 @@
-//! テンプレート用の debug logger。
+//! Debug logger for the template.
 //!
-//! DAW 上で開発すると stderr が見えないことが多いので、開発中すぐにログを
-//! 確認できるようにこの helper を用意している。製品では独自の logging backend
-//! に差し替える前提。
+//! stderr is often hidden when developing inside a DAW, so this helper makes logs
+//! immediately accessible during development. Production plugins are expected to
+//! replace it with a custom logging backend.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;

@@ -23,8 +23,9 @@ pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
     let profile = BuildProfile::from_release(args.release);
     let targets = resolve_build_targets(ctx.platform, &args.target)?;
 
-    // wrapper 系の不足は npm/cargo のビルド後に CMake エラーとして出ると原因が追いにくい。
-    // 対象が wrapper を必要とする時だけ、先にサブモジュールの実体まで確認する。
+    // Missing wrapper inputs surface as CMake errors after npm/cargo have already run,
+    // making the root cause hard to diagnose. Check submodule contents upfront only
+    // when the selected targets require a wrapper.
     if targets.iter().any(|target| target.is_wrapper()) || targets.contains(&Target::Standalone) {
         ensure_wrapper_inputs(
             ctx,
@@ -47,10 +48,11 @@ pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
     }
 
     if targets.iter().any(|target| target.is_wrapper()) {
-        // 旧 WRY_OBJC_SUFFIX 時代は macOS の ObjC class 名を format ごとに変えるため、
-        // VST3/AU で別々の Rust staticlib を作っていた。現在の wxp/wry は wry source id を
-        // objc2 の自動 class 名へ含めるため、同じ製品 build の VST3/AU は同じ staticlib を
-        // 共有できる。format ごとの compile-time 入力を再導入しない限り、ここで分けない。
+        // In the old WRY_OBJC_SUFFIX era, VST3 and AU each required a separate Rust
+        // staticlib so their Objective-C class names could differ per format. The current
+        // wxp/wry embeds the wry source ID into objc2's auto-generated class names, so a
+        // single staticlib can be shared by both VST3 and AU in the same product build.
+        // Do not split again unless per-format compile-time inputs are reintroduced.
         if !default_rust_plugin_built {
             build_rust_plugin(ctx, profile, RustPluginBuild::Default)?;
         }
@@ -75,8 +77,8 @@ pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
 
 fn build_gui(ctx: &Context) -> Result<()> {
     println!("Building GUI...");
-    // Rust 側の build.rs が src-gui/dist を埋め込むため、ここで先に frontend を確定させる。
-    // 順序を逆にすると古い dist や空の dist を plugin に含める可能性がある。
+    // build.rs embeds src-gui/dist into the plugin binary, so the frontend must be
+    // finalized here first. Reversing the order risks bundling a stale or empty dist.
     run(Command::new(npm_command(ctx.platform))
         .arg("install")
         .current_dir(ctx.gui_dir()))?;
@@ -141,7 +143,7 @@ fn build_rust_plugin(ctx: &Context, profile: BuildProfile, build: RustPluginBuil
         command.arg(flag);
     }
     if ctx.platform == Platform::Macos {
-        // CI や利用者環境の env を尊重しつつ、未指定時だけ template の安全な既定値を入れる。
+        // Respect CI and user environment variables; inject the template's safe default only when unset.
         command.env(
             "MACOSX_DEPLOYMENT_TARGET",
             env_value_or("MACOSX_DEPLOYMENT_TARGET", "11.0"),
@@ -154,8 +156,8 @@ fn build_rust_plugin(ctx: &Context, profile: BuildProfile, build: RustPluginBuil
         "dynamic plugin library",
     )?;
     if ctx.platform.supports_wrappers() {
-        // clap-wrapper は CLAP bundle ではなく Rust staticlib を直接 link する。
-        // CLAP だけの platform では不要なので、wrapper 対応 OS の時だけ確認する。
+        // clap-wrapper links the Rust staticlib directly rather than consuming a CLAP bundle.
+        // Not needed on CLAP-only platforms, so check only on OS targets that support wrappers.
         ensure_exists(&build.static_library(ctx, profile), "static plugin library")?;
     }
     Ok(())
@@ -170,9 +172,9 @@ fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
 
     match ctx.platform {
         Platform::Macos => {
-            // macOS の CLAP は裸の dylib ではなく bundle として配布される。
-            // host が bundle metadata を読むため、plugin id と Info.plist をここで一致させる。
-            // install_name も bundle 内相対にして、install 先を変えてもロードできるようにする。
+            // macOS distributes CLAP plugins as bundles, not bare dylibs.
+            // The host reads bundle metadata, so the plugin ID must match Info.plist.
+            // Set install_name to a bundle-relative path so the plugin loads regardless of install location.
             let contents = bundle.join("Contents");
             let macos = contents.join("MacOS");
             fs::create_dir_all(&macos)?;
@@ -193,8 +195,8 @@ fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
             codesign(&bundle)?;
         }
         Platform::Windows | Platform::Linux => {
-            // Windows/Linux では CLAP artifact は拡張子が .clap の dynamic library として扱う。
-            // bundle 構造を作らないことで各 OS の既存 host 探索規約に合わせる。
+            // On Windows/Linux the CLAP artifact is a dynamic library with the .clap extension.
+            // Skipping the bundle structure keeps it compatible with each OS's existing host scan conventions.
             fs::copy(ctx.dynamic_library(profile), &bundle)?;
         }
     }
@@ -239,9 +241,9 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
     fs::create_dir_all(&stage_dir)?;
 
     let mut configure = Command::new("cmake");
-    // wrapper は Rust staticlib から直接作る。既に生成済みの CLAP bundle を探す方式にすると、
-    // clean/install の順序や古い artifact に依存して再現性が落ちるため。
-    // stage 先も xtask が後続で検証する path と同じ値を CMake に渡す。
+    // Build the wrapper directly from the Rust staticlib. Locating a pre-built CLAP bundle
+    // instead would tie reproducibility to clean/install ordering and stale artifacts.
+    // Pass the same stage path that xtask uses for downstream validation checks.
     configure
         .arg("-S")
         .arg(&ctx.wrapper_dir)
@@ -280,8 +282,9 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=OFF");
         }
         WrapperBuild::Standalone => {
-            // standalone は plugin wrapper と違い、アプリ側の補助依存が必要になる。
-            // clap-wrapper 側の取得ロジックに任せ、plugin wrapper では依存 download を無効のまま保つ。
+            // standalone requires additional app-side dependencies that plugin wrappers do not.
+            // Delegate fetching to clap-wrapper's own download logic while keeping downloads
+            // disabled for plugin wrapper builds.
             configure
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_VST3=OFF")
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_AUV2=OFF")
@@ -299,8 +302,8 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
     }
 
     if ctx.platform == Platform::Macos {
-        // AUv2 は type/manufacturer/subtype の 4 文字コードが host discovery の key になる。
-        // Rust 側の descriptor から推測させず、template の constants を単一の入力にする。
+        // AUv2 uses 4-character type/manufacturer/subtype codes as the host discovery key.
+        // Drive them from the template's constants rather than inferring from the Rust descriptor.
         configure
             .arg(format!(
                 "-DAUDIOUNIT_SDK_ROOT={}",
@@ -338,8 +341,8 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
         .arg(profile.cmake_config());
 
     if ctx.platform == Platform::Macos {
-        // AudioUnitSDK は Xcode で warning-only な GNU statement-expression / narrowing を出す。
-        // template 利用者が wrapper SDK の warning に引きずられず build できるよう、ここだけ抑制する。
+        // AudioUnitSDK emits GNU statement-expression and narrowing warnings in Xcode.
+        // Suppress them here so template users are not pulled into wrapper SDK warnings.
         build_cmd.args([
             "--",
             "OTHER_CPLUSPLUSFLAGS=$(inherited) -Wno-unknown-warning-option -Wno-gnu-statement-expression-from-macro-expansion -Wno-shorten-64-to-32 -Wno-perf-constraint-implies-noexcept",
@@ -353,20 +356,20 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
             if vst3 {
                 ensure_exists(&ctx.vst3_bundle(profile), "VST3 artifact")?;
                 if ctx.platform == Platform::Macos {
-                    // macOS host は未署名 bundle を拒否することがあるため、開発用に ad-hoc 署名する。
+                    // macOS hosts may reject unsigned bundles; apply an ad-hoc signature for development.
                     codesign_nested_macos_bundle(ctx, &ctx.vst3_bundle(profile))?;
                 }
             }
             if au {
                 ensure_exists(&ctx.au_bundle(profile), "AU artifact")?;
-                // AU は AudioComponentRegistrar 経由で読むため、local build でも署名済みにしておく。
+                // AU components are loaded via AudioComponentRegistrar, so they must be signed even for local builds.
                 codesign_nested_macos_bundle(ctx, &ctx.au_bundle(profile))?;
             }
         }
         WrapperBuild::Standalone => {
             ensure_exists(&ctx.standalone_artifact(profile), "standalone artifact")?;
             if ctx.platform == Platform::Macos {
-                // standalone app も Gatekeeper/loader の扱いを plugin bundle と揃える。
+                // Apply the same Gatekeeper/loader treatment to the standalone app as to plugin bundles.
                 codesign_nested_macos_bundle(ctx, &ctx.standalone_artifact(profile))?;
             }
         }
@@ -513,8 +516,8 @@ fn install_artifact(artifact: &Path, destination_dir: &Path) -> Result<()> {
             .file_name()
             .ok_or_else(|| format!("artifact has no file name: {}", artifact.display()))?,
     );
-    // bundle の中身を上書き merge すると古い binary/resource が残り得る。
-    // 一度消してから丸ごとコピーし、install 結果を build artifact と一致させる。
+    // Merging over an existing bundle can leave behind stale binaries or resources.
+    // Remove the destination first, then copy the whole artifact so the installed result matches the build output exactly.
     remove_if_exists(&destination)?;
     copy_path(artifact, &destination)?;
     println!("Installed: {}", destination.display());
@@ -560,8 +563,8 @@ pub(crate) fn validate(
 ) -> Result<()> {
     let targets = resolve_validate_targets(ctx.platform, requested)?;
     if targets.contains(&ValidateTarget::Vst3) {
-        // validator は VST3 SDK からその場で build するため、artifact 確認より先に SDK を検証する。
-        // 空のサブモジュール directory だけで CMake まで進むと、利用者に原因が伝わりにくい。
+        // The validator is built on-demand from the VST3 SDK, so verify the SDK before checking
+        // the artifact. Proceeding to CMake with an empty submodule directory produces an opaque error.
         ensure_vst3_sdk_input(ctx)?;
     }
     validate_targets(ctx, profile, &targets)
@@ -600,13 +603,13 @@ fn validate_targets(
         ensure_exists(&au, "AU artifact")?;
         ensure_no_system_au_conflict(ctx)?;
 
-        // auval は path 指定ではなく AudioComponentRegistrar から対象を解決する。
-        // そのため freshly built な AU を user-local に置いてから validation する。
+        // auval resolves its target via AudioComponentRegistrar rather than a direct path,
+        // so the freshly built AU must be installed user-locally before running validation.
         let install_dir = install_dir(ctx, InstallScope::User, PluginFormat::Au)?;
         install_artifact(&au, &install_dir)?;
 
-        // registrar は component 情報を cache するため、直前に置いた AU を見せるには再起動が必要。
-        // killall が失敗しても auval 側で検出できる可能性があるので、ここでは best-effort にする。
+        // The registrar caches component metadata, so it must be restarted to expose the newly placed AU.
+        // If killall fails, auval may still detect the component, so treat this as best-effort.
         let _ = Command::new("killall")
             .args(["-9", "AudioComponentRegistrar"])
             .status();
@@ -725,8 +728,8 @@ fn ensure_vst3_validator(ctx: &Context) -> Result<PathBuf> {
         return Ok(validator_without_config);
     }
 
-    // validator は出荷 artifact ではなく検証用 tool。
-    // plugin の release/debug とは独立なので、Debug の 1 build を両 profile で使い回す。
+    // The validator is a verification tool, not a shipping artifact.
+    // It is independent of the plugin's release/debug profile, so a single Debug build is reused for both profiles.
     let build_dir = ctx.target_dir.join("vst3sdk-validator");
     let mut configure = Command::new("cmake");
     configure
@@ -765,8 +768,8 @@ pub(crate) fn clean(ctx: &Context) -> Result<()> {
 }
 
 fn ensure_wrapper_inputs(ctx: &Context, needs_vst3: bool, needs_au: bool) -> Result<()> {
-    // git submodule が未 init の場合、directory だけ存在して中身が空のことがある。
-    // CMake の抽象的な失敗に進ませず、wrapper が実際に読む sentinel file を見る。
+    // An uninitialized git submodule may leave only an empty directory in place.
+    // Rather than letting CMake fail with an opaque error, check the sentinel files the wrapper actually reads.
     ensure_exists(&ctx.wrapper_dir, "clap_wrapper_builder directory")?;
     ensure_exists(
         &ctx.wrapper_dir.join("clap-wrapper").join("CMakeLists.txt"),

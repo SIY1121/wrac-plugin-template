@@ -1,13 +1,14 @@
-//! この plugin 固有の WebView GUI runtime。
+//! Product-specific WebView GUI runtime for this plugin.
 //!
-//! GUI 本体は `src-gui/` の HTML/CSS/TypeScript。この module はそれを embed した
-//! WebView を host window に貼り付け、[`wxp`] の command/channel で frontend と
-//! 通信する。
+//! The GUI itself is the HTML/CSS/TypeScript in `src-gui/`. This module attaches
+//! a WebView containing that content to the host window and communicates with the
+//! frontend via [`wxp`] commands and channels.
 //!
-//! 役割分担:
-//! - `wrac_wxp_gui`: host UI thread の所有、callback dispatch、parent handle 変換
-//!   といった format 共通の厄介事
-//! - この module    : WebView の中身・登録 command・resize/scale など製品固有部分
+//! Responsibilities:
+//! - `wrac_wxp_gui`: format-neutral boilerplate — host UI thread ownership, callback
+//!   dispatch, parent handle conversion
+//! - this module   : WebView content, registered commands, resize/scale, and other
+//!   product-specific details
 
 use std::sync::Arc;
 
@@ -31,8 +32,8 @@ pub(crate) struct GuiIntegration {
     pub(crate) notifier: Arc<GuiStateNotifier>,
 }
 
-/// plugin core が使う GUI extension 一式を組み立てる。
-/// GUI 固有の詳細を `plugin.rs` から切り離すための入口。
+/// Assembles the complete GUI extension set used by the plugin core.
+/// Entry point that keeps GUI-specific details out of `plugin.rs`.
 pub(crate) fn create_gui_integration(
     project_state: Arc<ProjectStateStore>,
     shared: Arc<SharedState>,

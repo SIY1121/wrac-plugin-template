@@ -101,8 +101,8 @@ pub(super) fn four_char_code(bytes: [u8; 4]) -> [c_char; 5] {
     ]
 }
 
-// panic を C ABI の外へ出してはいけない。各 callback は Rust 側の失敗を返り値ごとの
-// conservative な CLAP value に変換し、foreign frame を unwind せず host に拒否させる。
+// Panics must not escape the C ABI boundary. Each callback converts Rust failures into
+// conservative CLAP return values so the host receives a rejection without unwinding foreign frames.
 pub(super) fn ffi_bool(f: impl FnOnce() -> bool) -> bool {
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => value,

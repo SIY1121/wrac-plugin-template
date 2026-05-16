@@ -46,6 +46,9 @@ cd my_plugin
 git submodule update --init --recursive
 ```
 
+Submodules are not needed if you are only building CLAP.
+The clap-wrapper-related submodules are required if you are building or validating VST3 / AU / Standalone.
+
 ### 2. Configure Plugin Identity
 
 Plugin identity is centralized in `src-plugin/Cargo.toml`.
@@ -61,10 +64,6 @@ auv2_subtype = "MyPl"
 auv2_manufacturer_code = "YrCo"
 standalone_name = "My Plugin Standalone"
 ```
-
-These values drive the Rust plugin descriptor, GUI About page, bundle names,
-standalone app name, wrapper build arguments, CLAP Info.plist, AUv2 validation,
-WebView data directory namespace, and debug log app name.
 
 > **Important:** The plugin ID must be globally unique. It cannot be changed once published.
 > AUv2 `auv2_type`, `auv2_subtype`, and `auv2_manufacturer_code` must each be exactly 4 ASCII bytes.
@@ -82,8 +81,7 @@ Use your IDE's find-and-replace, `rg`, or an LLM agent to search all files and r
 | kebab-case name in GUI / scripts / etc. | `wrac-gain-plugin` | `my-plugin` |
 | Repository URL in `Cargo.toml` files | `https://github.com/novonotes/wrac-plugin-template` | `https://github.com/your-org/my-plugin` |
 
-The repository URL points to this template by default. After generating a new
-project, update it to your own repository if you publish the crate metadata.
+The repository URL points to this template by default. After generating a new project, update it to your own repository if you publish the crate metadata.
 
 **Steps:**
 
@@ -113,23 +111,9 @@ cargo xtask build
 cargo xtask install
 ```
 
-The built plugin will be installed to the following directories:
-
-| OS | Install path |
-|----|-------------|
-| macOS | `~/Library/Audio/Plug-Ins/CLAP/` |
-| Windows | `%LOCALAPPDATA%/Programs/Common/CLAP/` and `%LOCALAPPDATA%/Programs/Common/VST3/` |
-| Linux | `~/.clap/` |
-
-On Windows, `cargo xtask install` installs to the user-local paths by default.
-Use `cargo xtask install --scope=system` to install to `%COMMONPROGRAMFILES%/CLAP/`
-and `%COMMONPROGRAMFILES%/VST3/` for hosts that only scan system-wide plug-in
-folders. `cargo xtask uninstall` removes both user-local and system-wide copies by default;
-use `cargo xtask uninstall --scope=user` or `--scope=system` to remove only one scope.
-
-VST3 / AU / standalone are built where supported by the current OS. Standalone
-apps do not have a plugin install destination, so xtask prints their artifact
-path instead.
+`cargo xtask install` installs to user-local paths by default.
+Use `cargo xtask install --scope=system` for hosts that only scan system-wide plugin folders.
+The `--target` option accepts `clap`, `vst3`, and `au` as comma-separated values.
 
 ### 5. Verify
 
@@ -142,6 +126,8 @@ npm install
 npm run dev
 ```
 
+For release builds, `src-plugin/build.rs` zips `src-gui/dist` and embeds it in the plugin binary, so the dev server is not needed.
+
 Launch your DAW and try inserting the plugin.
 Some DAWs may require a plugin rescan.
 The GUI supports hot reload — try editing the HTML files.
@@ -152,6 +138,11 @@ Attaching a debugger to a DAW can be difficult, so we recommend debugging as a s
 In VS Code, select the "Debug gain plugin standalone" configuration and run it.
 
 > **Note:** Audio feedback is present in standalone mode. **Use headphones.**
+
+### Reading Debug Logs
+
+Debug build logs are written to `.log/<plugin_name> Latest.log`.
+To follow the log, use `tail -f ".log/<plugin_name> Latest.log"` on macOS/Linux, or `Get-Content ".log\<plugin_name> Latest.log" -Wait` in Windows PowerShell.
 
 ## Next Steps
 

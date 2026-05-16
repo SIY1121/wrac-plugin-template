@@ -19,7 +19,7 @@ use crate::gui::GuiStateNotifier;
 use crate::plugin::{PARAM_GAIN_ID, PLUGIN_ID};
 use crate::state::{ProjectStateStore, SharedState};
 
-// GUI window のサイズ範囲 (pixel)。host は default で開き、resize は min..=max に clamp。
+// GUI window size bounds (pixels). The host opens at the default; resize is clamped to min..=max.
 pub(super) const DEFAULT_GUI_SIZE: GuiSize = GuiSize {
     width: 320,
     height: 380,
@@ -33,11 +33,11 @@ pub(super) const MAX_GUI_SIZE: GuiSize = GuiSize {
     height: 720,
 };
 
-// resize 時にクランプする論理ピクセルの上下限。
+// Logical-pixel bounds applied when clamping a resize request.
 const MIN_LOGICAL_GUI_SIZE: LogicalSize<f64> = LogicalSize::new(320.0, 340.0);
 const MAX_LOGICAL_GUI_SIZE: LogicalSize<f64> = LogicalSize::new(720.0, 720.0);
 
-// release のみ frontend zip を埋め込む。debug は Vite dev server を見るので不要。
+// Embed the frontend zip only for release builds; debug builds use the Vite dev server.
 #[cfg(not(debug_assertions))]
 const FRONTEND_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wrac_gain_plugin_gui.zip"));
 
@@ -51,32 +51,32 @@ pub(super) struct GuiRuntimeDependencies {
     pub(super) resize_handle: WxpGuiResizeHandle,
 }
 
-/// GUI window 1 つ分の runtime。host が GUI を開くたびに作られ、閉じると drop。
+/// Runtime for one GUI window. Created each time the host opens the GUI; dropped when closed.
 pub(crate) struct WracGainGuiRuntime {
     gui_notifier: Arc<GuiStateNotifier>,
-    // native WebView の寿命を持つ !Send + !Sync token。Drop 順を制御するため Option。
+    // !Send + !Sync token owning the native WebView. Stored as Option to control drop order.
     web_view: Option<WxpWebView>,
-    // WebView より長く生かす必要があるので保持する (Drop 順は下の Drop 実装参照)。
+    // Kept alive longer than the WebView (see the Drop impl below for ordering).
     wxp_context: Option<WebContext>,
     command_handler: Rc<WxpCommandHandler>,
-    // shared state の現在値を定期的に GUI へ反映する timer。
+    // Timer that periodically pushes the current shared state to the GUI.
     gui_update_timer: Timer,
     gui_size: LogicalSize<f64>,
-    // DPI スケールを考慮した bounds 変換に使う。
+    // Used for bounds conversion that accounts for DPI scaling.
     dpi_converter: DpiConverter,
 }
 
 impl WracGainGuiRuntime {
-    /// host が「GUI を開いて」と要求してきたタイミングで `plugin.rs` の closure
-    /// から呼ばれる factory。parent window に貼り付ける WebView を作って返す。
+    /// Factory called from the closure in `plugin.rs` when the host requests the GUI to open.
+    /// Creates a WebView attached to the parent window and returns it.
     pub(super) fn create(
         dependencies: GuiRuntimeDependencies,
         configuration: GuiConfiguration,
         initial_size: GuiSize,
         parent: ParentWindowHandle,
     ) -> PluginResult<Self> {
-        // このサンプルは embedded (parent に貼り付けるタイプ) しか対応していない。
-        // floating window が必要な場合は別途実装する。
+        // This sample supports only embedded mode (attached to the parent).
+        // Implement floating window support separately if needed.
         if configuration.is_floating {
             log::warn!("rejecting floating GUI configuration");
             return Err(PluginError::Message("unsupported GUI configuration"));
@@ -87,7 +87,7 @@ impl WracGainGuiRuntime {
             initial_size.height
         );
 
-        // WebView から呼べる parameter command を登録する。
+        // Register parameter commands callable from the WebView.
         log::debug!("creating GUI runtime: creating command handler");
         let command_handler = Rc::new(WxpCommandHandler::new());
         log::debug!("creating GUI runtime: registering commands");
@@ -102,8 +102,9 @@ impl WracGainGuiRuntime {
         );
         log::debug!("creating GUI runtime: commands registered");
 
-        // WebView2 は同じ user data folder を別の Environment options で共有すると作成に
-        // 失敗し得るため、OS 標準のアプリデータ配下に plugin ID 単位で分離する。
+        // WebView2 can fail to initialise when two instances share the same user data folder
+        // with different Environment options, so isolate each plugin by ID under the
+        // OS standard app-data directory.
         let data_dir = webview_data_dir(PLUGIN_ID);
         std::fs::create_dir_all(&data_dir)
             .map_err(|_| PluginError::Message("failed to create GUI data directory"))?;
@@ -111,7 +112,7 @@ impl WracGainGuiRuntime {
 
         log::debug!("creating GUI runtime: creating WebContext");
         let mut wxp_context = WebContext::new(data_dir);
-        // 初期 scale は 1.0 とし、後で host から `set_scale` で書き換えられる。
+        // Initial scale is 1.0; the host will override it via `set_scale` later.
         let dpi_converter = DpiConverter::new(1.0);
         let gui_size = gui_size_to_logical(initial_size);
         let bounds = dpi_converter.create_webview_bounds(gui_size);
@@ -121,8 +122,8 @@ impl WracGainGuiRuntime {
             gui_size.height
         );
 
-        // debug は Vite dev server を見る (frontend 変更で native の再 build 不要)。
-        // release は dev server に依存できないので build.rs が固めた zip を serve する。
+        // Debug builds point to the Vite dev server (no native rebuild needed on frontend changes).
+        // Release builds cannot depend on a dev server, so the zip bundled by build.rs is served.
         #[cfg(debug_assertions)]
         let builder = {
             let url = "http://127.0.0.1:5173/";
@@ -144,23 +145,24 @@ impl WracGainGuiRuntime {
                 .with_devtools(cfg!(debug_assertions))
                 .with_visible(true)
                 .with_bounds(bounds)
-                // 埋め込み zip を `wxp-plugin://` scheme で配信する。
+                // Serve the embedded zip under the `wxp-plugin://` scheme.
                 .with_serve_zip("wxp-plugin", FRONTEND_ZIP)
                 .map_err(|_| PluginError::Message("failed to serve GUI assets"))?
                 .with_url(url)
         };
 
-        // parent window 上に子として WebView を作る。これで host UI に埋め込まれる。
+        // Create the WebView as a child of the parent window, embedding it in the host UI.
         log::debug!("creating GUI runtime: build_as_child start");
         let web_view = builder
             .build_as_child(&parent)
             .map_err(|_| PluginError::Message("failed to build webview"))?;
         log::debug!("creating GUI runtime: build_as_child completed");
 
-        // 33ms ≒ 30Hz で現在値を GUI に流す。dirty flag を持たず毎回 shared state
-        // を読む方が構造が単純。CLAP の `request_callback()` は wrapper 経由だと
-        // host の dispatch 実装に依存し GUI だけ値が古くなることがあるので、
-        // GUI runtime 自身の run loop の timer で定期回収する。
+        // Push the current value to the GUI at ~30 Hz (33 ms). Reading shared state on
+        // every tick is simpler than maintaining a dirty flag. CLAP's `request_callback()`
+        // depends on the host's dispatch implementation when going through a wrapper and
+        // can leave the GUI with stale values, so a timer on the GUI runtime's own run
+        // loop is used instead.
         let gui_update_timer = Timer::new(Duration::from_millis(33), {
             let shared = dependencies.shared.clone();
             let gui_notifier = dependencies.gui_notifier.clone();
@@ -185,16 +187,16 @@ impl WracGainGuiRuntime {
     }
 }
 
-// host から呼ばれる resize / scale / size 取得などの操作を実装する trait。
+// Trait implementation for resize, scale, and size operations called by the host.
 impl WxpGuiRuntime for WracGainGuiRuntime {
-    /// host が表示倍率 (HiDPI 等) を伝えてきたときに呼ばれる。
+    /// Called when the host reports a display scale factor (e.g. HiDPI).
     fn set_scale(&mut self, scale: f64) -> PluginResult<()> {
         log::debug!("setting GUI scale: scale={scale}");
         self.dpi_converter.set_scale(scale);
         Ok(())
     }
 
-    /// host が window サイズを変えたときに呼ばれる。範囲を clamp してから WebView に反映する。
+    /// Called when the host changes the window size. Clamps to the valid range before applying.
     fn set_size(&mut self, size: GuiSize) -> PluginResult<()> {
         let requested = LogicalSize::new(size.width as f64, size.height as f64);
         self.gui_size = LogicalSize::new(
@@ -214,8 +216,9 @@ impl WxpGuiRuntime for WracGainGuiRuntime {
         );
 
         if let Some(web_view) = &self.web_view {
-            // wxp は native WebView の直接操作を owner から分離している。ここは GUI thread 上だが、
-            // stale-close checks と post/enqueue semantics を同じ経路に揃えるため dispatch 経由にする。
+            // wxp separates direct native WebView manipulation from the owner. Even though this
+            // is already on the GUI thread, dispatch is used to align with stale-close checks
+            // and the post/enqueue semantics used elsewhere.
             web_view
                 .dispatch()
                 .post_set_bounds(self.dpi_converter.create_webview_bounds(self.gui_size))
@@ -227,8 +230,8 @@ impl WxpGuiRuntime for WracGainGuiRuntime {
     fn show(&mut self) -> PluginResult<()> {
         log::debug!("showing GUI runtime");
         if let Some(web_view) = &self.web_view {
-            // show/hide は host lifecycle と競合しやすいので、owner を直接触らず wxp 側の
-            // close-aware dispatch path に寄せる。
+            // show/hide often races with host lifecycle events, so the close-aware dispatch
+            // path in wxp is used rather than touching the owner directly.
             web_view
                 .dispatch()
                 .post_set_visible(true)
@@ -243,8 +246,8 @@ impl WxpGuiRuntime for WracGainGuiRuntime {
         log::debug!("hiding GUI runtime");
         self.gui_update_timer.stop();
         if let Some(web_view) = &self.web_view {
-            // hide は destroy 直前に呼ばれることがある。dispatch は WebView が閉じていれば
-            // WebViewClosed を返し、native object の寿命を延ばさない。
+            // hide can be called just before destroy. If the WebView is already closed,
+            // dispatch returns WebViewClosed without extending the native object's lifetime.
             web_view
                 .dispatch()
                 .post_set_visible(false)
@@ -257,8 +260,8 @@ impl WxpGuiRuntime for WracGainGuiRuntime {
 
 fn webview_data_dir(plugin_id: &str) -> PathBuf {
     let plugin_dir = sanitize_plugin_data_dir(plugin_id);
-    // WebView user-data も plugin_id 由来にする。ここだけ template 名を持つと、
-    // rename 後の plugin が旧 plugin と cookie/cache/storage を共有してしまう。
+    // Derive the WebView user-data path from plugin_id too. Hard-coding the template name
+    // here would cause a renamed plugin to share cookies, cache, and storage with the original.
     match project_dirs_from_plugin_id(plugin_id) {
         Some(dirs) => dirs.data_dir().join("webview").join(plugin_dir),
         None => std::env::temp_dir()
@@ -292,25 +295,27 @@ fn sanitize_plugin_data_dir(plugin_id: &str) -> String {
         .collect()
 }
 
-// drop 順を field 宣言順に任せず、切断 → WebView 破棄 → context 破棄の順に
-// 明示する。callback が解放済み object を触る事故を防ぐため。
+// Override the field-declaration drop order and explicitly sequence:
+// disconnect → destroy WebView → destroy context.
+// This prevents callbacks from touching already-freed objects.
 impl Drop for WracGainGuiRuntime {
     fn drop(&mut self) {
         log::debug!("dropping GUI runtime");
-        // timer callback は run loop と GUI subscription に依存する。native WebView を
-        // 落とす前に止めて、破棄途中の GUI state を tick が見る余地をなくす。
+        // The timer callback depends on the run loop and GUI subscriptions. Stop it before
+        // dropping the native WebView so no tick can observe partially-destroyed GUI state.
         self.gui_update_timer.stop();
         log::debug!("dropping GUI runtime: timer stopped");
-        // GUI が消えるので、shared state からも channel を外しておく。
+        // The GUI is going away; clear channels from shared state as well.
         self.gui_notifier.clear_subscriptions();
         log::debug!("dropping GUI runtime: subscriptions cleared");
-        // WebView → WebContext の順で drop。逆だと wry が context 不在で panic することがある。
+        // Drop WebView before WebContext. The reverse order can cause wry to panic
+        // when the context is absent during WebView teardown.
         self.web_view = None;
         log::debug!("dropping GUI runtime: webview dropped");
         self.wxp_context = None;
         log::debug!("dropping GUI runtime: web context dropped");
-        // `command_handler` と `gui_update_timer` は field drop に任せる。
-        // 下記 2 行は「ここまで生かしたい」ことを明示するためのダミー read。
+        // `command_handler` and `gui_update_timer` are left to field drop order.
+        // The two reads below make the intended "keep alive until here" explicit.
         let _ = Rc::strong_count(&self.command_handler);
         let _ = self.gui_update_timer.is_running();
     }

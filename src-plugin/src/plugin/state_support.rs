@@ -9,10 +9,10 @@ use crate::state::{
     EditorPage, ParameterStateSnapshot, ProjectState, ProjectStateStore, SharedState,
 };
 
-/// DAW project に保存する plugin state の serialize 形式 (JSON)。
+/// Serialisation format (JSON) for the plugin state saved in a DAW project.
 ///
-/// realtime parameter は [`SharedState`] から、editor-only state は
-/// [`ProjectStateStore`] から snapshot し、この 1 形式に合成して host へ渡す。
+/// Realtime parameters are snapshotted from [`SharedState`] and editor-only state from
+/// [`ProjectStateStore`]; both are merged into this single format before passing to the host.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SavedPluginState {
     pub(crate) gain: f32,
@@ -42,8 +42,8 @@ impl WracGainStateSupport {
     }
 }
 
-// project 保存で `save_state`、復元で `restore_state`。bytes 形式は自由なので、
-// デバッグしやすい JSON にしている。
+// `save_state` is called on project save, `restore_state` on load. The byte format is
+// unrestricted, so JSON is used here for ease of debugging.
 impl PluginStateSupport for WracGainStateSupport {
     fn save_state(&self) -> PluginResult<PluginState> {
         let project = self.project_state.snapshot();

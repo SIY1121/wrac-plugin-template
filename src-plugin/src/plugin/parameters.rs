@@ -6,22 +6,22 @@ use wrac_clap_adapter::{
 
 use crate::state::SharedState;
 
-// parameter ID は host が automation / project 保存に使う安定値。一度公開したら変えない。
-// 新しい parameter を追加するとき: ここに ID を足し、`PluginParameters` 実装と
-// `SharedState` の match を揃える。
+// Parameter IDs are stable values used by the host for automation and project saving.
+// Never change them after publishing. To add a new parameter: append an ID here and
+// keep the `PluginParameters` impl and `SharedState` match arms in sync.
 pub(crate) const PARAM_GAIN_ID: u32 = 1;
 pub(crate) const PARAM_BYPASS_ID: u32 = 9;
 
-// gain は線形 amplitude。1.0 = 0 dB (素通し)、0.0 = 無音、2.0 = +6 dB。
+// Gain is a linear amplitude. 1.0 = 0 dB (unity), 0.0 = silence, 2.0 = +6 dB.
 pub(crate) const DEFAULT_GAIN: f32 = 1.0;
 pub(crate) const MIN_GAIN: f32 = 0.0;
 pub(crate) const MAX_GAIN: f32 = 2.0;
 
-/// host から見える parameter API。
+/// The parameter API as seen by the host.
 ///
-/// schema / 値は generic editor・automation・restore 後の rescan から並行に読まれる。
-/// [`SharedState`] の atomic SoT だけを触り、GUI runtime や project state には
-/// 踏み込まないことで、host query を lifecycle と切り離している。
+/// Schema and values are read concurrently from generic editors, automation, and post-restore
+/// rescans. Touching only the atomic source of truth in [`SharedState`] — without reaching
+/// into the GUI runtime or project state — decouples host queries from the plugin lifecycle.
 pub(super) struct WracGainParameters {
     shared: Arc<SharedState>,
 }
@@ -32,16 +32,16 @@ impl WracGainParameters {
     }
 }
 
-// 新しい parameter を追加するときの host 公開ポイント (schema と文字列表現)。
+// The host-facing publication point for new parameters (schema and string representation).
 impl PluginParameters for WracGainParameters {
     fn parameter_count(&self) -> u32 {
-        // 新しい parameter を追加するとき: この数と `parameter_info()` の match を揃える。
+        // When adding a new parameter: keep this count in sync with the `parameter_info()` match.
         log::debug!("parameter_count -> 2");
         2
     }
 
     fn parameter_info(&self, index: u32) -> Option<ParameterInfo> {
-        // index ↔ stable id の対応表。id は project/automation に残るので変えない。
+        // Mapping of sequential index to stable ID. IDs persist in project/automation data — never change them.
         let info = match index {
             0 => Some(gain_parameter_info()),
             1 => Some(bypass_parameter_info()),
@@ -54,7 +54,7 @@ impl PluginParameters for WracGainParameters {
         info
     }
 
-    /// host が「今この parameter の値はいくつ?」と尋ねてきたときに答える。
+    /// Answers the host's query for the current value of a parameter.
     fn parameter_value(&self, parameter_id: u32) -> PluginResult<f64> {
         match parameter_id {
             PARAM_GAIN_ID => self
@@ -71,7 +71,7 @@ impl PluginParameters for WracGainParameters {
         }
     }
 
-    /// host から input event として parameter 値が届いたときの経路。
+    /// Called when a parameter value arrives from the host as an input event.
     fn apply_parameter_value(&self, event: ParameterValueEvent) -> PluginResult<f64> {
         if event.parameter_id == PARAM_BYPASS_ID {
             return self
@@ -87,7 +87,7 @@ impl PluginParameters for WracGainParameters {
         Ok(gain_to_host_value(value))
     }
 
-    /// 内部値 → 表示文字列。例: 1.0 → "0.0 dB"。
+    /// Converts an internal value to a display string. Example: 1.0 → "0.0 dB".
     fn parameter_value_to_text(&self, parameter_id: u32, value: f64) -> PluginResult<String> {
         match parameter_id {
             PARAM_GAIN_ID => parameter_value_text(parameter_id, host_value_to_gain(value)),
@@ -96,7 +96,7 @@ impl PluginParameters for WracGainParameters {
         }
     }
 
-    /// 表示文字列 → 内部値。ユーザーが host UI に "3 dB" のように入力したとき呼ばれる。
+    /// Converts a display string to an internal value. Called when the user types "3 dB" into the host UI.
     fn parameter_text_to_value(&self, parameter_id: u32, text: &str) -> PluginResult<f64> {
         match parameter_id {
             PARAM_GAIN_ID => parameter_text_value(parameter_id, text)
@@ -111,7 +111,7 @@ impl PluginParameters for WracGainParameters {
     }
 }
 
-/// gain を有効範囲に収める。外部から来た値はすべてこれを通してから使う。
+/// Clamps gain to the valid range. All externally supplied values must pass through this.
 pub(crate) fn clamp_gain(gain: f32) -> f32 {
     gain.clamp(MIN_GAIN, MAX_GAIN)
 }
@@ -125,7 +125,7 @@ pub(crate) fn gain_parameter_info() -> ParameterInfo {
         max_value: 1.0,
         default_value: gain_to_host_value(DEFAULT_GAIN),
         flags: ParameterFlags {
-            // false にすると DAW で automation できなくなる。
+            // Setting this false prevents automation in the DAW.
             is_automatable: true,
             ..ParameterFlags::default()
         },
@@ -133,8 +133,8 @@ pub(crate) fn gain_parameter_info() -> ParameterInfo {
 }
 
 pub(crate) fn bypass_parameter_info() -> ParameterInfo {
-    // 一部の host は bypass parameter が無いと generic editor に他の parameter も
-    // 出さない。テンプレートでも実際に効く bypass を 1 つ持たせておく。
+    // Some hosts suppress all parameters in their generic editor if there is no bypass
+    // parameter. Include a working bypass even in the template.
     ParameterInfo {
         id: PARAM_BYPASS_ID,
         name: "Bypass",
@@ -145,8 +145,8 @@ pub(crate) fn bypass_parameter_info() -> ParameterInfo {
         flags: ParameterFlags {
             is_automatable: true,
             is_stepped: true,
-            // 選択肢型は enum も立てる。wrapper が host ネイティブの list
-            // metadata に変換し、一部の generic editor がそれに依存する。
+            // Also set the enum flag for stepped choice parameters. The wrapper converts
+            // this to the host's native list metadata, which some generic editors rely on.
             is_enum: true,
             is_bypass: true,
             ..ParameterFlags::default()
@@ -154,8 +154,8 @@ pub(crate) fn bypass_parameter_info() -> ParameterInfo {
     }
 }
 
-/// plain value → 表示文字列。GUI payload の `text` もこれを通すので、host UI と
-/// plugin GUI の表示が必ず揃う。新しい parameter は match に追加する。
+/// Converts a plain value to a display string. GUI payloads route through here too, so
+/// the host UI and plugin GUI always show the same text. Add new parameters to the match arm.
 pub(crate) fn parameter_value_text(parameter_id: u32, value: f64) -> PluginResult<String> {
     match parameter_id {
         PARAM_GAIN_ID => Ok(gain_db_text(clamp_gain(value as f32) as f64)),
@@ -164,8 +164,8 @@ pub(crate) fn parameter_value_text(parameter_id: u32, value: f64) -> PluginResul
     }
 }
 
-/// parameter の default 値 (plain value)。reset 機能などが使う。
-/// 新しい parameter は match に追加する。
+/// Default value (plain value) for a parameter. Used by reset features, etc.
+/// Add new parameters to the match arm.
 pub(crate) fn parameter_default_value(parameter_id: u32) -> PluginResult<f64> {
     match parameter_id {
         PARAM_GAIN_ID => Ok(DEFAULT_GAIN as f64),
@@ -182,7 +182,7 @@ pub(crate) fn parameter_text_value(parameter_id: u32, text: &str) -> PluginResul
             let db = text
                 .parse::<f64>()
                 .map_err(|_| PluginError::InvalidParameter)?;
-            // dB → 線形 amplitude に変換してから clamp。
+            // Convert dB to linear amplitude, then clamp.
             Ok(clamp_gain(10.0_f64.powf(db / 20.0) as f32) as f64)
         }
         PARAM_BYPASS_ID => match text.trim().to_ascii_lowercase().as_str() {
@@ -215,7 +215,7 @@ pub(crate) fn host_value_to_gain(value: f64) -> f64 {
     (MIN_GAIN + value * (MAX_GAIN - MIN_GAIN)) as f64
 }
 
-/// 線形 amplitude を dB 表示の文字列に変換する。0 以下は "-inf dB"。
+/// Converts a linear amplitude to a dB display string. Values ≤ 0 return "-inf dB".
 pub(crate) fn gain_db_text(gain: f64) -> String {
     if gain <= 0.0 {
         "-inf dB".to_string()

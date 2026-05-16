@@ -62,18 +62,20 @@ pub struct Auv2Descriptor {
     pub plugin_subtype: [u8; 4],
 }
 
-/// plugin binary に固定される descriptor と factory 関数。
+/// Descriptor and factory function fixed for the plugin binary.
 ///
-/// factory callback は任意タイミングで呼ばれるので static に置く。不変にすることで
-/// global mutable registry や pointer リークに頼らず C ABI に渡せる。
+/// The factory callback may be called at any time, so it is stored statically. Being
+/// immutable allows it to be passed to the C ABI without relying on a global mutable
+/// registry or pointer leaks.
 pub struct PluginRegistration {
     pub(crate) descriptor: PluginDescriptor,
     pub(crate) create: CreatePluginCore,
     storage: OnceLock<PluginRegistrationStorage>,
 }
 
-// 安全性: `descriptor` と `create` は static registration の不変データで、mutable state は
-// `OnceLock` が同期する。C ABI から複数 thread で factory query されても共有参照だけを返す。
+// Safety: `descriptor` and `create` are immutable data in the static registration;
+// mutable state is synchronized by `OnceLock`. Factory queries from multiple threads
+// via the C ABI return only shared references.
 unsafe impl Sync for PluginRegistration {}
 unsafe impl Send for PluginRegistration {}
 
@@ -98,8 +100,9 @@ pub(crate) struct PluginRegistrationStorage {
     pub descriptor: ClapDescriptorStorage,
 }
 
-// 安全性: storage 作成後は factory/descriptor の pointer を読み出すだけにしている。
-// 内部 pointer は同じ storage が所有する buffer を指し、`OnceLock` で初期化競合も防ぐ。
+// Safety: after creation the storage only reads out factory/descriptor pointers.
+// Internal pointers point to buffers owned by this same storage, and `OnceLock`
+// prevents initialization races.
 unsafe impl Sync for PluginRegistrationStorage {}
 unsafe impl Send for PluginRegistrationStorage {}
 
@@ -128,8 +131,8 @@ impl PluginRegistrationStorage {
     }
 }
 
-// CLAP factory callback は factory pointer だけを受け取るため、先頭 field に C ABI
-// struct を置き、callback 内で state へ戻す。
+// CLAP factory callbacks receive only a factory pointer, so the C ABI struct is placed
+// as the first field and cast back to the state inside the callback.
 #[repr(C)]
 pub(crate) struct ClapFactoryState {
     pub factory: clap_plugin_factory,
@@ -170,8 +173,9 @@ pub(crate) struct ClapPluginFactoryAsAuv2 {
 unsafe impl Sync for ClapPluginFactoryAsAuv2 {}
 unsafe impl Send for ClapPluginFactoryAsAuv2 {}
 
-// `clap_plugin_descriptor` は C string pointer だけを保持するため、CString/feature
-// pointer の owner を同じ storage に置いて descriptor pointer の有効期間を揃える。
+// `clap_plugin_descriptor` holds only C string pointers, so the owners of the CString
+// and feature pointer arrays are placed in the same storage to keep their lifetimes
+// aligned with the descriptor pointer.
 pub(crate) struct ClapDescriptorStorage {
     _id: CString,
     _name: CString,
@@ -187,8 +191,9 @@ pub(crate) struct ClapDescriptorStorage {
     clap_descriptor: clap_plugin_descriptor,
 }
 
-// 安全性: descriptor storage は初期化後に変更しない。raw pointer は外部所有物ではなく、
-// この struct 内の CString/Vec へ向いているため、共有しても data race にはならない。
+// Safety: the descriptor storage is not mutated after initialization. Raw pointers point
+// into CString/Vec fields owned by this struct, not external memory, so sharing them
+// causes no data race.
 unsafe impl Sync for ClapDescriptorStorage {}
 unsafe impl Send for ClapDescriptorStorage {}
 

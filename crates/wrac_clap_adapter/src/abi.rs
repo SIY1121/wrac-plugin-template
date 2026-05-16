@@ -1,7 +1,7 @@
-//! CLAP ABI と `PluginCore` instance を結びつける module。
+//! Module that binds the CLAP ABI to `PluginCore` instances.
 //!
-//! public API は `lib.rs` の re-export と `export_clap_plugin!` に集約し、この module
-//! は C ABI callback と adapter state の所有だけを扱う。
+//! The public API is surfaced through re-exports in `lib.rs` and `export_clap_plugin!`.
+//! This module is responsible only for C ABI callbacks and owning the adapter state.
 
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
@@ -50,25 +50,25 @@ use crate::{
     ProcessStatus, Processor,
 };
 
-// clap-wrapper は AUv2 metadata 生成時にこの draft factory を読む。CLAP descriptor とは
-// 別に AU manufacturer/subtype を渡さないと、generic wrapper identity と衝突して
-// auval が古い別 plugin を検証することがある。
+// clap-wrapper reads this draft factory when generating AUv2 metadata. Without a
+// separate AU manufacturer/subtype, it can collide with the generic wrapper identity
+// and cause auval to validate a different, older plugin instead.
 const CLAP_PLUGIN_FACTORY_INFO_AUV2: &CStr = c"clap.plugin-factory-info-as-auv2.draft0";
 
-/// CLAP instance と Rust core の同期境界。
+/// Synchronization boundary between a CLAP instance and the Rust core.
 ///
-/// 設計の要: 「lifecycle lock」と「host-facing callback が直接読む capability」を
-/// 分ける。`core` lock は processor 所有権を動かす `activate`/`deactivate` だけで
-/// 使い、parameter/state/port query は instance 作成時に固定した `Arc` を読む。
-/// 分けないと、wrapper が `activate()` 中に query を再入させたとき core lock を
-/// 取れず「parameter なし」「state 保存失敗」を host に返してしまう (crash は
-/// しないが project data や routing を壊す)。
+/// Key design: separate the "lifecycle lock" from "capabilities read directly by
+/// host-facing callbacks". The `core` lock is used only by `activate`/`deactivate`,
+/// which move processor ownership. Parameter/state/port queries read `Arc`s frozen at
+/// instance creation. Without this separation, a wrapper that re-enters a query during
+/// `activate()` would fail to acquire the core lock and return "no parameters" or "state
+/// save failed" to the host — no crash, but project data and routing can be corrupted.
 pub(crate) struct PluginInstance {
     plugin: clap_plugin,
-    // processor lifecycle の所有者。lock を取るのは activate/deactivate だけ。
+    // Owner of the processor lifecycle; only activate/deactivate take this lock.
     core: RwLock<Box<dyn PluginCore>>,
-    // capability の有無は instance 作成時に固定する。runtime state と連動させると
-    // 「query した瞬間だけ extension が消える」不安定な見え方になるため。
+    // Capability presence is frozen at instance creation. Coupling it to runtime state
+    // would make extensions appear to disappear transiently during queries.
     capabilities: PluginCapabilities,
     audio_ports: Option<Arc<dyn PluginAudioPorts>>,
     configurable_audio_ports: Option<Arc<dyn PluginConfigurableAudioPorts>>,
@@ -76,12 +76,13 @@ pub(crate) struct PluginInstance {
     parameters: Option<Arc<dyn PluginParameters>>,
     state: Option<Arc<dyn PluginStateSupport>>,
     gui: Option<Arc<dyn PluginGui>>,
-    // GUI mutation callback の再入 guard。再入時は待たず失敗させ deadlock を避ける
-    // (GUI query callback はこの guard を通らない)。
+    // Re-entry guard for GUI mutation callbacks. Fails immediately on re-entry to avoid
+    // deadlock (GUI query callbacks do not go through this guard).
     gui_callback_busy: Mutex<()>,
     parameter_edits: Arc<ParameterEditQueue>,
-    // wrapper が thread/lifecycle 注釈を崩しても soundness を保つため、RT 経路は
-    // lock せず atomic guard が取れた callback だけ `Processor` への `&mut` を作る。
+    // To preserve soundness even when a wrapper violates thread/lifecycle annotations,
+    // the RT path never takes a lock — only a callback that wins the atomic guard
+    // constructs a `&mut` to `Processor`.
     processor: UnsafeCell<Option<Box<dyn Processor>>>,
     processor_busy: AtomicBool,
     lifecycle_busy: AtomicBool,
@@ -97,25 +98,25 @@ pub(crate) struct PluginCapabilities {
     gui: bool,
 }
 
-// 安全性: CLAP は callback 間で同じ opaque plugin pointer を共有する。adapter state は
-// lock/atomic 経由で共有し、host の thread annotation や callback 順序が崩れても Rust
-// aliasing だけは破らない。
+// Safety: CLAP shares the same opaque plugin pointer across callbacks. Adapter state is
+// shared via locks and atomics, so Rust aliasing rules are never violated even when the
+// host's thread annotations or callback ordering breaks down.
 unsafe impl Send for PluginInstance {}
 unsafe impl Sync for PluginInstance {}
 
 impl PluginInstance {
     fn new(registration: &'static PluginRegistration, host: *const clap_host) -> Box<Self> {
         let parameter_edits = Arc::new(ParameterEditQueue::new(host));
-        // notifier は safe proxy として渡す。製品 GUI は host pointer や CLAP event
-        // lifetime を知らずにこれを保持できる。
+        // Pass as a safe proxy so product GUI code can hold it without knowing about
+        // host pointers or CLAP event lifetimes.
         let context = PluginCoreContext {
             host_parameter_edit_notifier: parameter_edits.clone(),
             host_gui_resize_requester: Arc::new(HostGuiResizeRequest::new(host)),
         };
         let core = (registration.create)(context);
-        // capability は callback 開始前のここで固定する (get_extension 中に core
-        // lock を待つと host の再入順に依存するため)。得た Arc は入口にすぎず、
-        // 値の SoT は plugin 実装側の store に残る。
+        // Freeze capabilities here, before callbacks begin. Waiting on the core lock
+        // inside get_extension would make us dependent on host re-entry order. The Arc
+        // is just an entry point; the source of truth remains in the plugin's store.
         let audio_ports = core.audio_ports();
         let configurable_audio_ports = core.configurable_audio_ports();
         let note_ports = core.note_ports();
@@ -221,8 +222,8 @@ impl PluginInstance {
                 drop(old);
                 return;
             }
-            // activate は非 RT。Processor の有無を別状態へ複製せず、実体の borrow guard が
-            // 空くまで待ってから格納する。
+            // activate is not realtime. Rather than duplicating processor presence as
+            // separate state, wait until the borrow guard is free, then store.
             std::thread::yield_now();
         }
     }
@@ -232,9 +233,9 @@ impl PluginInstance {
             if let Some(processor) = self.try_take_processor() {
                 return processor;
             }
-            // deactivate/destroy は非 RT の lifecycle callback です。ここで待つことで、
-            // lifecycle と audio を競合させる wrapper でも `process()` が一時的な
-            // Processor borrow を持ったまま instance を解放しないようにする。
+            // deactivate/destroy are non-realtime lifecycle callbacks. Waiting here
+            // ensures that even a wrapper which races lifecycle against audio never
+            // frees the instance while process() holds a temporary Processor borrow.
             std::thread::yield_now();
         }
     }
@@ -256,8 +257,9 @@ impl PluginInstance {
             if let Some(guard) = self.try_enter_lifecycle() {
                 return guard;
             }
-            // `destroy()` は待てる callback です。待たずに解放すると、順序の崩れた
-            // wrapper lifecycle callback が adapter state を保持したままになる。
+            // `destroy()` is a callback that can afford to wait. Releasing without
+            // waiting would leave out-of-order wrapper lifecycle callbacks holding
+            // stale adapter state.
             std::thread::yield_now();
         }
     }
@@ -491,8 +493,9 @@ unsafe extern "C" fn plugin_deactivate(plugin: *const clap_plugin) {
             log::warn!("plugin.deactivate: missing plugin instance");
             return;
         };
-        // deactivate は host へ完了を返す前に Processor を必ず回収したい cleanup callback。
-        // wrapper が lifecycle callback を並行させても、ここでは待って破棄漏れを避ける。
+        // deactivate is a cleanup callback that must reclaim the Processor before
+        // returning completion to the host. Even if a wrapper runs lifecycle callbacks
+        // concurrently, wait here to avoid missing the teardown.
         let _guard = instance.enter_lifecycle_blocking();
         if let Some(processor) = instance.take_processor_blocking() {
             if let Err(error) = instance.core.write().deactivate(processor) {
@@ -508,9 +511,10 @@ unsafe extern "C" fn plugin_start_processing(plugin: *const clap_plugin) -> bool
             log::warn!("plugin.start_processing: missing plugin instance");
             return false;
         };
-        // `start_processing` / `stop_processing` は wrapper format では VST3/AU 側の
-        // activate と同期しないことがある。専用 flag は host 都合で audio を止める
-        // 故障点になるため、処理可否は Processor の有無だけで判断する。
+        // In wrapper formats, `start_processing` / `stop_processing` may not be
+        // synchronized with the VST3/AU activate. A dedicated flag would become a
+        // failure point that stops audio at the host's discretion, so whether processing
+        // is possible is determined solely by the presence of a Processor.
         let can_process = instance.has_processor_or_busy();
         if !can_process {
             log::warn!("plugin.start_processing: no processor is available");
@@ -570,9 +574,10 @@ unsafe extern "C" fn plugin_process(
             }
         };
 
-        // audio callback は `PluginCore` の lock を取らない。処理可能かどうかも別 flag ではなく
-        // 実際の `Processor` の有無だけで決める。wrapper が lifecycle 順序を崩した場合でも、
-        // RT 経路では待たずに sleep/error へ倒す。
+        // The audio callback never takes the `PluginCore` lock. Whether processing is
+        // possible is determined by the actual presence of a `Processor`, not a separate
+        // flag. If a wrapper violates lifecycle ordering, the RT path falls through to
+        // sleep/error without waiting.
         let Some(result) = instance.with_processor_mut(|processor| {
             let Some(processor) = processor else {
                 log::debug!("plugin.process: no processor is available");

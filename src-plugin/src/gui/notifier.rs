@@ -9,23 +9,23 @@ use wxp::Channel;
 use crate::plugin::parameter_value_text;
 use crate::state::EditorPage;
 
-/// WebView 側へ GUI state を push する通知口。通知タイミングは呼び出し元が決める。
+/// Outbound notification channel that pushes GUI state to the WebView. The caller decides when to notify.
 pub(crate) struct GuiStateNotifier {
     next_subscription_id: AtomicU64,
     subscriptions: Mutex<HashMap<GuiSubscriptionId, GuiSubscription>>,
 }
 
-/// WebView 側 subscriber 1 つぶんの登録情報。
+/// Registration record for a single WebView subscriber.
 ///
-/// `kind` (何の stream か) と `channel` (送り先) を分けて持つことで、parameter /
-/// meter / analyzer などを個別に購読・解除でき、古い cleanup が別の購読を
-/// 巻き込んで消す事故も防げる。
+/// Separating `kind` (which stream) from `channel` (the destination) lets parameters,
+/// meters, and analysers be subscribed and unsubscribed independently, and prevents a
+/// stale cleanup from accidentally cancelling an unrelated subscription.
 #[derive(Clone)]
 struct GuiSubscription {
     kind: GuiSubscriptionKind,
-    // 通知を UI thread に戻すための run loop sender。
+    // Run loop sender for dispatching notifications back to the UI thread.
     sender: RunLoopSender,
-    // WebView 側 JS の subscriber に値を送る channel。
+    // Channel for sending values to the JS subscriber in the WebView.
     channel: Channel,
 }
 
@@ -42,9 +42,9 @@ impl GuiSubscriptionId {
     }
 }
 
-/// 購読の種類。meter や analyzer の stream を足すときは variant を追加し、
-/// `notify_*` でその variant の subscription にだけ配信する
-/// (Channel を増やさず種別で振り分ける設計)。
+/// Subscription kind. Add a variant when adding meter or analyser streams, and deliver
+/// to only matching subscriptions in `notify_*` — this design routes by kind rather than
+/// multiplying channels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GuiSubscriptionKind {
     Parameters,
@@ -68,8 +68,8 @@ impl GuiStateNotifier {
     }
 
     fn subscribe(&self, kind: GuiSubscriptionKind, channel: Channel) -> GuiSubscriptionId {
-        // id は wxp の Channel id とは独立に採番。transport と購読 lifecycle を
-        // 別々に管理するため。
+        // IDs are assigned independently of wxp's Channel IDs so that transport and
+        // subscription lifecycle can be managed separately.
         let id = GuiSubscriptionId(self.next_subscription_id.fetch_add(1, Ordering::Relaxed));
         self.subscriptions.lock().insert(
             id,
@@ -105,8 +105,8 @@ impl GuiStateNotifier {
     }
 
     fn notify(&self, kind: GuiSubscriptionKind, payload: serde_json::Value) {
-        // 送り先が notifier を再入しても deadlock しないよう、配信対象を
-        // clone してから lock を離す。
+        // Clone the delivery targets before releasing the lock so that a re-entrant
+        // call from a recipient cannot deadlock.
         let subscriptions: Vec<_> = self
             .subscriptions
             .lock()
@@ -115,15 +115,15 @@ impl GuiStateNotifier {
             .cloned()
             .collect();
         if subscriptions.is_empty() {
-            // GUI が開いていなければ送り先がないので何もしない。
+            // No subscribers when the GUI is closed; nothing to do.
             return;
         }
 
         for subscription in subscriptions {
             let payload = payload.clone();
-            // WebView channel は GUI runtime と同じ UI thread でしか触れない。
-            // host/audio thread から直接送ると thread affinity を破るので、
-            // 必ず run loop に戻してから channel に渡す。
+            // WebView channels may only be touched on the same UI thread as the GUI
+            // runtime. Sending directly from a host or audio thread would violate thread
+            // affinity, so always dispatch back through the run loop first.
             subscription.sender.send(move || {
                 let _ = subscription.channel.send(payload);
             });
@@ -131,8 +131,8 @@ impl GuiStateNotifier {
     }
 }
 
-/// WebView へ送る JSON payload。TypeScript 側はこの形を期待する。
-/// 新しい parameter でも payload の形は変えず `parameterId` で振り分ける。
+/// JSON payload sent to the WebView. The TypeScript side expects this shape.
+/// The shape is unchanged for new parameters; routing is done by `parameterId`.
 pub(crate) fn parameter_payload(parameter_id: u32, value: f32) -> serde_json::Value {
     json!({
         "type": "parameter-value",

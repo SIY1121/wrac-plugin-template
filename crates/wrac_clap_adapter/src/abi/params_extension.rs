@@ -26,9 +26,9 @@ pub(super) static PARAMS: clap_plugin_params = clap_plugin_params {
     flush: Some(params_flush),
 };
 
-// VST3/AU/AAX wrapper では parameter query が CLAP の `[main-thread]` 前提から外れて
-// 呼ばれることがある。parameters capability は instance 作成時に固定した Arc を直接読み、
-// GUI/runtime 所有権や lifecycle mutation に入らない。
+// VST3/AU/AAX wrappers may invoke parameter queries outside the CLAP `[main-thread]` assumption.
+// The parameters capability reads the Arc fixed at instance creation and does not touch
+// GUI/runtime ownership or lifecycle mutation.
 unsafe extern "C" fn params_count(plugin: *const clap_plugin) -> u32 {
     ffi_u32(|| {
         let Some(instance) = (unsafe { PluginInstance::from_plugin(plugin) }) else {

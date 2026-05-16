@@ -10,14 +10,15 @@ use wrac_clap_adapter::{GuiConfiguration, GuiSize, PluginError, PluginResult};
 use crate::window::ParentWindowHandle;
 
 thread_local! {
-    // WebView などの native GUI object は、生成 thread 以外へ移動できない実装が多い。
-    // `WxpGuiController` は Send/Sync な `PluginCore` の中に置かれるため、実体は TLS に閉じ込める。
+    // Native GUI objects such as WebViews are typically bound to the thread that created them.
+    // `WxpGuiController` lives inside a Send/Sync `PluginCore`, so runtimes are confined to TLS.
     static GUI_RUNTIMES: RefCell<HashMap<u64, GuiRuntimeEntry>> = RefCell::new(HashMap::new());
 }
 
 static NEXT_GUI_ID: AtomicU64 = AtomicU64::new(1);
-// この helper は template 用の割り切りとして単一 UI thread を前提にする。複数 UI thread
-// まで受け入れるには runtime storage と run loop ownership を per-thread に再設計する必要がある。
+// This helper assumes a single UI thread — an acceptable simplification for a template.
+// Supporting multiple UI threads would require redesigning runtime storage and run loop
+// ownership on a per-thread basis.
 static GUI_THREAD_STATE: Mutex<GuiThreadState> = Mutex::new(GuiThreadState {
     owner: None,
     ref_count: 0,
@@ -30,23 +31,26 @@ struct GuiThreadState {
 
 struct GuiRuntimeEntry {
     runtime: Box<dyn WxpGuiRuntime>,
-    // runtime が TLS から remove されるまで run loop を生かす。handle 側で手動 release
-    // すると、runtime drop 中に timer や WebView teardown が run loop を必要とする場合に
-    // 順序を間違えやすいので、entry の lifetime に lease を結び付ける。
+    // Keep the run loop alive until the runtime is removed from TLS. Releasing the lease
+    // manually from the handle side is error-prone when timer teardown or WebView cleanup
+    // still needs the run loop during the runtime's drop, so tie the lease lifetime to
+    // the entry's.
     _lease: GuiThreadLease,
 }
 
-/// GUI thread の run loop 参照を表す RAII token。
+/// RAII token representing a reference to the GUI thread's run loop.
 ///
-/// TODO: `novonotes_run_loop` 側に transactional な guard API が入ったら、この型は
-/// その thin wrapper に寄せる。現状の `RunLoop::init()` は失敗時 rollback が API 契約に
-/// なっていないため、ここではローカル state を進めない範囲で防御する。
+/// TODO: once `novonotes_run_loop` gains a transactional guard API, this type should
+/// become a thin wrapper around it. The current `RunLoop::init()` does not guarantee
+/// full rollback on failure, so the local state is not advanced beyond what can be
+/// safely undone.
 pub(crate) struct GuiThreadLease;
 
-/// UI thread が所有する実際の WebView runtime。
+/// The actual WebView runtime owned by the UI thread.
 ///
-/// `Send` / `Sync` を要求しないのは意図的です。native GUI object は作成 thread に縛られる
-/// ため、`GuiRuntimeHandle` から run loop に戻して操作する。
+/// Not requiring `Send` / `Sync` is intentional: native GUI objects are bound to the
+/// thread that created them, so operations are dispatched back through the run loop via
+/// `GuiRuntimeHandle`.
 pub trait WxpGuiRuntime: 'static {
     fn set_scale(&mut self, scale: f64) -> PluginResult<()>;
     fn set_size(&mut self, size: GuiSize) -> PluginResult<()>;
@@ -58,10 +62,10 @@ pub trait WxpGuiRuntime: 'static {
     }
 }
 
-/// 製品固有 runtime を作る factory。
+/// Factory that creates a product-specific GUI runtime.
 ///
-/// factory 自体は `PluginCore` 内に保持されるため `Send + Sync` を要求するが、返す
-/// runtime は UI thread の TLS に置くので `Send` を要求しない。
+/// The factory itself is `Send + Sync` because it is held inside `PluginCore`, but the
+/// runtime it returns does not need to be `Send` — it lives in the UI thread's TLS.
 pub trait WxpGuiFactory: Send + Sync + 'static {
     fn create_gui_runtime(
         &self,
@@ -99,8 +103,8 @@ pub(crate) fn create_gui_runtime_handle(
 ) -> PluginResult<GuiRuntimeHandle> {
     log::debug!("wxp runtime: acquiring GUI thread lease");
     let lease = GuiThreadLease::acquire()?;
-    // `create` が失敗した場合、lease はここで drop される。失敗した runtime 作成が
-    // GUI thread ref を残さないことを型の drop 順で保証する。
+    // If `create` fails, the lease is dropped here. Drop order guarantees that a failed
+    // runtime creation leaves no GUI thread reference behind.
     match create() {
         Ok(runtime) => {
             log::debug!("wxp runtime: factory returned runtime");
@@ -227,8 +231,9 @@ impl GuiThreadLease {
             return Err(PluginError::UnsupportedHostGuiThreadingModel);
         }
 
-        // owner は `RunLoop::init()` 成功後にだけ進める。依存 crate の init が失敗時に
-        // 完全 rollback する保証はまだないため、少なくともこちらの SoT は汚さない。
+        // Advance the owner only after `RunLoop::init()` succeeds. The dependency's init
+        // does not guarantee full rollback on failure, so at least keep our own source of
+        // truth clean.
         gui_thread.owner = Some(current_thread);
         gui_thread.ref_count += 1;
         log::debug!(
@@ -252,8 +257,8 @@ impl Drop for GuiThreadLease {
             gui_thread.ref_count
         );
         if gui_thread.ref_count == 0 {
-            // 最後の runtime だけでなく `set_parent()` 由来の thread 固定も解放された時点で、
-            // 次の GUI session が別 host window から来ることを許可する。
+            // Once both the last runtime and the thread affinity acquired via `set_parent()`
+            // are released, allow the next GUI session to arrive from a different host window.
             gui_thread.owner = None;
             log::debug!("wxp GUI thread lease: owner cleared");
         }

@@ -9,11 +9,12 @@ use crate::{
     ParameterValueEvent, PluginParameters,
 };
 
-/// UI 由来の parameter edit を host が受け取れるまで保持する queue。
+/// Queue that holds UI-originated parameter edits until the host can receive them.
 ///
-/// CLAP output queue は `flush()`/`process()` callback 中しか存在しない。GUI に
-/// 直接 CLAP event を作らせると callback lifetime 越えの pointer を握ることになるので、
-/// adapter は意味情報だけ保存し、出力 queue が来た時点で CLAP event へ変換する。
+/// The CLAP output queue only exists during `flush()`/`process()` callbacks. Letting
+/// the GUI construct CLAP events directly would mean holding pointers beyond the
+/// callback lifetime, so the adapter stores only semantic information and converts to
+/// CLAP events when the output queue becomes available.
 pub(crate) struct ParameterEditQueue {
     pending: Mutex<VecDeque<ParameterEditEvent>>,
     host_params: Option<HostParams>,
@@ -44,8 +45,9 @@ impl ParameterEditQueue {
     }
 
     pub(crate) fn drain_output_parameter_events(&self, events: &mut OutputEvents<'_>) {
-        // audio callback 上で UI thread と待ち合わないため、queue が一瞬 busy なら次回
-        // flush/process へ回す。host への request_flush は edit 追加時点で発行済み。
+        // Avoid waiting on the UI thread from the audio callback. If the queue is
+        // momentarily busy, defer to the next flush/process. request_flush to the host
+        // was already issued when the edit was enqueued.
         let Some(mut pending) = self.pending.try_lock() else {
             log::debug!("parameter_edits.drain: pending queue try_lock failed; retrying later");
             return;
@@ -53,9 +55,10 @@ impl ParameterEditQueue {
 
         while let Some(event) = pending.pop_front() {
             if !push_parameter_edit(events, event) {
-                // CLAP output queue は host 所有で、queue full や no-buffer flush では拒否され得る。
-                // 送れなかった edit を捨てると automation gesture が欠けるため、順序を保って
-                // 次回の flush/process に回す。
+                // The CLAP output queue is host-owned and may reject events when full
+                // or during a no-buffer flush. Discarding an unsent edit would drop an
+                // automation gesture, so preserve ordering and defer to the next
+                // flush/process.
                 pending.push_front(event);
                 break;
             }
@@ -64,8 +67,8 @@ impl ParameterEditQueue {
 
     fn push(&self, event: ParameterEditEvent) {
         self.pending.lock().push_back(event);
-        // request_flush は queue 追加後に出す。host によってはこの通知がないと
-        // `flush()` を呼ばないため、UI edit を automation lane へ返す機会を失う。
+        // Issue request_flush after enqueuing. Some hosts will not call `flush()`
+        // without this notification, causing UI edits to never reach the automation lane.
         self.request_flush();
     }
 
@@ -160,8 +163,9 @@ struct HostParams {
     request_flush: Option<unsafe extern "C" fn(host: *const clap_host)>,
 }
 
-// host pointer の instance lifetime は CLAP ABI で避けられない最小前提です。wrapper
-// 固有の thread/order は信じず、adapter 内では `request_flush()` だけに用途を限定する。
+// The instance lifetime of the host pointer is the minimal unavoidable assumption of the
+// CLAP ABI. Wrapper-specific thread/order guarantees are not trusted; within the adapter
+// usage is limited to `request_flush()` only.
 unsafe impl Send for HostParams {}
 unsafe impl Sync for HostParams {}
 

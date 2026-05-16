@@ -38,8 +38,9 @@ struct HostGuiRequestResize {
     request_resize: unsafe extern "C" fn(host: *const clap_host, width: u32, height: u32) -> bool,
 }
 
-// host pointer の instance lifetime は CLAP ABI で避けられない最小前提です。用途は
-// GUI thread からの request_resize に限定し、製品側へ raw pointer は公開しない。
+// The instance lifetime of the host pointer is the minimal unavoidable assumption of the
+// CLAP ABI. Use is limited to request_resize from the GUI thread; the raw pointer is
+// not exposed to product code.
 unsafe impl Send for HostGuiRequestResize {}
 unsafe impl Sync for HostGuiRequestResize {}
 

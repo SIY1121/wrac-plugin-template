@@ -1,10 +1,10 @@
 use wrac_clap_adapter::GuiSize;
 use wxp::dpi::{LogicalPosition, LogicalSize, Size};
 
-/// CLAP GUI size と wxp bounds の変換。
+/// Conversion between CLAP GUI sizes and wxp bounds.
 ///
-/// macOS/Windows と Linux で WebView が期待する単位が違うため、製品ごとに同じ DPI
-/// 分岐を持たせず、wxp integration 側に寄せる。
+/// The unit expected by WebView differs between macOS/Windows and Linux.
+/// Centralising the DPI branch here avoids duplicating it in every product.
 pub struct DpiConverter {
     scale_factor: f64,
     uses_logical: bool,
@@ -38,9 +38,11 @@ pub fn gui_size_to_logical(size: GuiSize) -> LogicalSize<f64> {
     LogicalSize::new(size.width as f64, size.height as f64)
 }
 
-/// wxp の logical size を CLAP `GuiSize` へ戻す helper。
-/// WebView/layout 由来のサイズを resize request や state に返すとき、platform
-/// ごとの変換を製品側に散らさないよう public API として残している。
+/// Converts a wxp logical size back to a CLAP [`GuiSize`].
+///
+/// Keeping this as a public API prevents per-platform conversion logic from leaking
+/// into product code when returning a WebView- or layout-derived size as a resize
+/// request or state value.
 pub fn logical_size_to_gui(size: LogicalSize<f64>) -> GuiSize {
     GuiSize {
         width: size.width as u32,
