@@ -12,7 +12,7 @@ mod targets;
 mod util;
 
 use cli::{Cli, Commands};
-use commands::{build, clean, install, uninstall, validate};
+use commands::{build, clean, install, launch, uninstall, validate};
 use context::Context;
 use profile::BuildProfile;
 
@@ -34,6 +34,7 @@ fn main() -> Result<()> {
         Commands::Validate(args) => {
             validate(&ctx, BuildProfile::from_release(args.release), &args.target)?
         }
+        Commands::Launch(args) => launch(&ctx, BuildProfile::from_release(args.release))?,
         Commands::Clean => clean(&ctx)?,
     }
 

@@ -3,11 +3,11 @@ use std::mem::size_of;
 use std::ptr;
 
 use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_END,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_END,
     CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
     CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END, CLAP_EVENT_PARAM_MOD,
-    CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, clap_event_header, clap_event_note,
-    clap_event_note_expression, clap_event_param_gesture, clap_event_param_mod,
+    CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, clap_event_header, clap_event_midi,
+    clap_event_note, clap_event_note_expression, clap_event_param_gesture, clap_event_param_mod,
     clap_event_param_value, clap_event_transport, clap_input_events, clap_note_expression,
     clap_output_events, clap_transport_flags,
 };
@@ -249,6 +249,12 @@ impl InputEvent {
             CLAP_EVENT_NOTE_EXPRESSION if has_size::<clap_event_note_expression>(header) => Some(
                 Self::NoteExpression(NoteExpressionEvent::from_raw(unsafe { cast_event(header) })),
             ),
+            CLAP_EVENT_MIDI if has_size::<clap_event_midi>(header) => {
+                // Some wrappers and hosts deliver MIDI dialect input as raw MIDI events even when
+                // the plugin's audio code only cares about note semantics. Convert the channel note
+                // messages here so processors can handle CLAP notes and MIDI notes uniformly.
+                midi_note_event_from_raw(unsafe { cast_event(header) })
+            }
             CLAP_EVENT_PARAM_VALUE if has_size::<clap_event_param_value>(header) => {
                 Some(Self::ParamValue(parameter_value_from_raw(unsafe {
                     cast_event(header)
@@ -291,6 +297,28 @@ impl InputEvent {
             Self::Transport(event) => event.time,
             Self::Unknown(event) => event.time,
         }
+    }
+}
+
+fn midi_note_event_from_raw(raw: &clap_event_midi) -> Option<InputEvent> {
+    let status = raw.data[0] & 0xF0;
+    let channel = raw.data[0] & 0x0F;
+    let key = raw.data[1];
+    let velocity = raw.data[2];
+    let note = NoteEvent {
+        time: raw.header.time,
+        note_id: -1,
+        port_index: raw.port_index as i16,
+        channel: channel as i16,
+        key: key as i16,
+        velocity: f64::from(velocity) / 127.0,
+    };
+
+    match status {
+        0x80 => Some(InputEvent::NoteOff(note)),
+        0x90 if velocity == 0 => Some(InputEvent::NoteOff(note)),
+        0x90 => Some(InputEvent::NoteOn(note)),
+        _ => Some(InputEvent::Unknown(UnknownEvent::from_header(&raw.header))),
     }
 }
 
@@ -545,8 +573,9 @@ mod tests {
     use std::ffi::c_void;
 
     use clap_sys::events::{
-        CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, clap_event_header,
-        clap_event_note, clap_event_param_value, clap_input_events,
+        CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+        clap_event_header, clap_event_midi, clap_event_note, clap_event_param_value,
+        clap_input_events,
     };
 
     use super::{InputEvent, InputEvents};
@@ -627,6 +656,80 @@ mod tests {
                 assert_eq!(event.velocity, 0.5);
             }
             _ => panic!("expected note on"),
+        }
+    }
+
+    #[test]
+    fn input_events_convert_midi_note_messages() {
+        let note_on = clap_event_midi {
+            header: clap_event_header {
+                size: std::mem::size_of::<clap_event_midi>() as u32,
+                time: 10,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_MIDI,
+                flags: 0,
+            },
+            port_index: 0,
+            data: [0x91, 64, 100],
+        };
+        let note_off = clap_event_midi {
+            header: clap_event_header {
+                size: std::mem::size_of::<clap_event_midi>() as u32,
+                time: 20,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_MIDI,
+                flags: 0,
+            },
+            port_index: 0,
+            data: [0x80, 64, 0],
+        };
+        let zero_velocity_note_on = clap_event_midi {
+            header: clap_event_header {
+                size: std::mem::size_of::<clap_event_midi>() as u32,
+                time: 30,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_MIDI,
+                flags: 0,
+            },
+            port_index: 0,
+            data: [0x91, 67, 0],
+        };
+        let mut list_data = EventList {
+            events: vec![
+                &note_on.header,
+                &note_off.header,
+                &zero_velocity_note_on.header,
+            ],
+        };
+        let raw = clap_input_events {
+            ctx: (&mut list_data as *mut EventList).cast::<c_void>(),
+            size: Some(event_count),
+            get: Some(event_get),
+        };
+        let events = unsafe { InputEvents::from_raw(&raw) };
+
+        match events.get(0).unwrap() {
+            InputEvent::NoteOn(event) => {
+                assert_eq!(event.time, 10);
+                assert_eq!(event.channel, 1);
+                assert_eq!(event.key, 64);
+                assert_eq!(event.velocity, 100.0 / 127.0);
+            }
+            _ => panic!("expected midi note on"),
+        }
+        match events.get(1).unwrap() {
+            InputEvent::NoteOff(event) => {
+                assert_eq!(event.time, 20);
+                assert_eq!(event.key, 64);
+            }
+            _ => panic!("expected midi note off"),
+        }
+        match events.get(2).unwrap() {
+            InputEvent::NoteOff(event) => {
+                assert_eq!(event.time, 30);
+                assert_eq!(event.key, 67);
+            }
+            _ => panic!("expected zero-velocity note on as note off"),
         }
     }
 

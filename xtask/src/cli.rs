@@ -85,6 +85,15 @@ Notes:
   AU validation is available only on macOS and installs the built AU before running auval.
   AU validation fails if the same AU bundle exists under /Library/Audio/Plug-Ins/Components.";
 
+const LAUNCH_AFTER_HELP: &str = "\
+Examples:
+  cargo xtask launch
+  cargo xtask launch --release
+
+Notes:
+  launch starts a previously built standalone artifact.
+  Run `cargo xtask build --target=standalone` first.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "xtask",
@@ -118,6 +127,11 @@ pub(crate) enum Commands {
         after_help = VALIDATE_AFTER_HELP
     )]
     Validate(ValidateArgs),
+    #[command(
+        about = "Launch a previously built standalone artifact.",
+        after_help = LAUNCH_AFTER_HELP
+    )]
+    Launch(LaunchArgs),
     #[command(about = "Remove generated build artifacts managed by xtask.")]
     Clean,
 }
@@ -131,6 +145,7 @@ pub(crate) struct BuildArgs {
     pub(crate) clean: bool,
 
     #[arg(
+        short_alias = 't',
         long,
         value_enum,
         value_delimiter = ',',
@@ -155,6 +170,7 @@ pub(crate) struct InstallArgs {
     pub(crate) scope: InstallScope,
 
     #[arg(
+        short_alias = 't',
         long,
         value_enum,
         value_delimiter = ',',
@@ -189,6 +205,7 @@ pub(crate) struct UninstallArgs {
     pub(crate) scope: UninstallScope,
 
     #[arg(
+        short_alias = 't',
         long,
         value_enum,
         value_delimiter = ',',
@@ -211,6 +228,7 @@ pub(crate) struct ValidateArgs {
     pub(crate) release: bool,
 
     #[arg(
+        short_alias = 't',
         long,
         value_enum,
         value_delimiter = ',',
@@ -219,4 +237,10 @@ pub(crate) struct ValidateArgs {
         long_help = "Targets to validate, comma-separated. Supported values are clap, vst3, and au. Defaults to every validation target supported by the current OS."
     )]
     pub(crate) target: Vec<ValidateTarget>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct LaunchArgs {
+    #[arg(long, help = "Launch release artifact.")]
+    pub(crate) release: bool,
 }

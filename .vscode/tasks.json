@@ -22,20 +22,11 @@
 		{
 			"label": "open-wrac-gain-standalone",
 			"type": "process",
-			"command": "open",
+			"command": "cargo",
 			"args": [
-				"${workspaceFolder}/target/wrac/standalone/debug/WRAC Gain Standalone.app"
+				"xtask",
+				"launch"
 			],
-			"osx": {
-				"command": "open",
-				"args": [
-					"${workspaceFolder}/target/wrac/standalone/debug/WRAC Gain Standalone.app"
-				]
-			},
-			"windows": {
-				"command": "${workspaceFolder}/target/wrac/standalone/debug/WRAC Gain Standalone.exe",
-				"args": []
-			},
 			"presentation": {
 				"reveal": "always",
 				"panel": "new",
