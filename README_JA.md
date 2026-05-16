@@ -46,7 +46,7 @@ cargo xtask install
 
 対応フォーマット:
 
-| OS | 対応フォーマット | 
+| OS | 対応フォーマット |
 |----|---------------------------|
 | macOS | CLAP / VST3 / AU / Standalone |
 | Windows | CLAP / VST3 / Standalone |
