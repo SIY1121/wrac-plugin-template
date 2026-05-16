@@ -76,7 +76,7 @@ jobs:
         run: cargo test --locked --workspace
 
   plugin-build:
-    name: Supported artifact validation (${{ matrix.os }})
+    name: Plugin artifact validation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs:
       - rust-format
