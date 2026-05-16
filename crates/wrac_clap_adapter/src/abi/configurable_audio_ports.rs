@@ -28,10 +28,10 @@ unsafe extern "C" fn configurable_audio_ports_can_apply_configuration(
             log::warn!("configurable_audio_ports.can_apply: missing plugin instance");
             return false;
         };
-        // layout は Processor の buffer view 契約を変えるので active 中は拒否。
-        // active 判定は実際の Processor の有無と lifecycle busy だけで行う
-        // (wrapper は start/stop_processing を省略・遅延し得るため SoT にしない)。
-        // これで plugin 側は「Processor 生存中は layout 不変」を前提にできる。
+        // Layout changes invalidate the Processor's buffer view contract, so reject while active.
+        // Activity is determined solely by whether a Processor exists and whether lifecycle is busy
+        // (wrappers may omit or delay start/stop_processing, so they are not the source of truth).
+        // This lets the plugin assume the layout is stable for the lifetime of any Processor.
         if instance.has_processor_or_busy() || instance.lifecycle_busy.load(Ordering::Acquire) {
             log::warn!(
                 "configurable_audio_ports.can_apply: rejected while processor/lifecycle is busy"
@@ -81,9 +81,9 @@ unsafe extern "C" fn configurable_audio_ports_apply_configuration(
             return false;
         };
 
-        // host が `can_apply` を省いても安全なよう `apply` でも同条件を再確認する。
-        // 確認と apply を同じ lifecycle guard 内で行わないと、processor 不在確認の
-        // 直後に `activate()` が古い layout を snapshot する race が残る。
+        // Re-check the same conditions in `apply` for hosts that skip `can_apply`.
+        // Performing the check and the apply under the same lifecycle guard closes the race
+        // where `activate()` could snapshot a stale layout immediately after the processor-absent check.
         let Some(_guard) = instance.try_enter_lifecycle() else {
             log::warn!("configurable_audio_ports.apply: rejected while lifecycle is busy");
             return false;
@@ -143,8 +143,9 @@ fn convert_port_type(port_type: *const std::ffi::c_char) -> AudioPortType {
     } else if port_type == CLAP_PORT_STEREO {
         AudioPortType::Stereo
     } else {
-        // port_type 文字列は callback 中だけ有効。`Other` で製品へ渡すと lifetime を
-        // 偽ることになるので、未知 type は channel_count だけで判断させる。
+        // The port_type string is valid only during the callback. Passing it as `Other` to product
+        // code would lie about its lifetime, so unknown types are represented as Unspecified
+        // and the product is expected to decide based on channel_count alone.
         AudioPortType::Unspecified
     }
 }

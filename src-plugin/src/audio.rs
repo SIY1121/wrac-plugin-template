@@ -1,8 +1,9 @@
-//! audio thread 上で動く DSP。
+//! DSP running on the audio thread.
 //!
-//! このサンプルは入力に gain を掛けて書き戻すだけ。[`Processor::process`] は
-//! 小さな buffer ごとに繰り返し呼ばれる realtime 関数なので、**allocation と
-//! lock を避ける**のが鉄則。共有 state は [`SharedState`] から lock-free に読む。
+//! This sample simply multiplies the input by a gain and writes it back.
+//! [`Processor::process`] is a realtime function called repeatedly for each small buffer,
+//! so the rule is to **avoid allocations and locks**. Shared state is read lock-free from
+//! [`SharedState`].
 
 use std::sync::Arc;
 
@@ -14,20 +15,21 @@ use wrac_clap_adapter::{
 use crate::plugin::{PARAM_BYPASS_ID, PARAM_GAIN_ID, host_value_to_gain};
 use crate::state::SharedState;
 
-/// `activate()` で生成され、host の audio thread が所有する DSP 実体。
-/// `deactivate()` まで生き続け、その間 `process()` が何度も呼ばれる。
+/// The DSP instance created at `activate()` and owned by the host's audio thread.
+/// It lives until `deactivate()`, during which `process()` is called repeatedly.
 ///
-/// field は **audio thread が待たずに読めるもの**だけにする。`shared` は atomic
-/// なので process 中に読める。`audio_channel_count` は activate 時点で
-/// plugin の audio layout store から copy した snapshot。adapter が active 中の
-/// layout 変更を拒否するので、走行中の Processor の契約は途中で変わらない。製品で
-/// layout に応じ DSP を変える場合も、`Arc<RwLock<Layout>>` を持たせず activate
-/// 時に必要な設定へ変換して渡すのが安全。
+/// Fields should contain only things **the audio thread can read without waiting**.
+/// `shared` uses atomics and is safe to read during `process()`.
+/// `audio_channel_count` is a snapshot copied from the plugin's audio layout store at
+/// activate time. Because the adapter rejects layout changes while active, the running
+/// Processor's contract cannot change mid-flight. Even when a product's DSP must vary
+/// with layout, it is safer to convert the needed settings at activate time and pass them
+/// in rather than storing an `Arc<RwLock<Layout>>`.
 pub(crate) struct WracGainAudioProcessor {
     shared: Arc<SharedState>,
-    // gain 自体は channel count を使わないが、「layout は activate で snapshot して
-    // field に持つ」形をテンプレートとして示すために保持する。
-    // debug build では実 buffer がこの snapshot と一致するか検査する。
+    // Gain itself does not use channel count, but this field demonstrates the pattern
+    // "snapshot layout at activate time and store it as a field."
+    // In debug builds, the actual buffer is verified to match this snapshot.
     audio_channel_count: u32,
 }
 
@@ -41,16 +43,17 @@ impl WracGainAudioProcessor {
 }
 
 impl Processor for WracGainAudioProcessor {
-    /// 1 ブロック分を処理する。`context` には入出力 `audio`、このブロックの
-    /// parameter event 列 `events.input`、sample 数 `frames_count` が入る。
+    /// Processes one block. `context` contains the audio I/O, the parameter event list
+    /// `events.input` for this block, and the sample count `frames_count`.
     ///
-    /// parameter event の発生時刻で buffer を区切り、区間ごとに当時の gain を
-    /// 掛けることで sample 精度の automation を実現する (event 間は gain 一定)。
+    /// The buffer is split at each parameter event's timestamp, and the gain current at
+    /// that moment is applied to each segment, achieving sample-accurate automation
+    /// (gain is constant between events).
     fn process(&mut self, context: ProcessContext<'_>) -> PluginResult<ProcessStatus> {
         #[cfg(debug_assertions)]
         {
-            // allocation 違反を即 abort。DAW/adapter が panic を握りつぶしても
-            // 見逃さないため、debug build で全 process を包む。
+            // Abort immediately on any allocation. Wrapping every process() call in
+            // debug builds ensures violations are not swallowed by the DAW or adapter.
             assert_no_alloc::assert_no_alloc(|| self.process_no_alloc(context))
         }
 
@@ -69,16 +72,16 @@ impl WracGainAudioProcessor {
             self.audio_channel_count,
         );
 
-        // ブロック開始時点の gain。event が来るたびに更新される。
+        // Gain at the start of this block; updated each time a parameter event arrives.
         let mut gain = self.shared.gain();
         let mut bypass = self.shared.bypass();
-        // 「ここまで処理した」位置を表すカーソル。
+        // Cursor tracking how far into the block has been processed.
         let mut segment_start = 0;
         let frames_count = context.frames_count as usize;
 
         for event in context.events.input.iter() {
-            // event 発生位置までを現在の gain で処理する。
-            // event time は host から信用しない (= buffer 範囲外を防ぐ) ため clamp。
+            // Process up to the event position with the current gain.
+            // Clamp event time rather than trusting the host, to prevent out-of-bounds access.
             let event_time = (event.time() as usize).min(frames_count);
             if event_time > segment_start {
                 let effective_gain = if bypass { 1.0 } else { gain };
@@ -91,7 +94,7 @@ impl WracGainAudioProcessor {
                 segment_start = event_time;
             }
 
-            // 今回扱うのは gain / bypass の parameter event だけ。それ以外 (note 等) は無視。
+            // Only gain/bypass parameter events are handled here; others (notes, etc.) are ignored.
             if let InputEvent::ParamValue(event) = event {
                 if event.parameter_id == PARAM_GAIN_ID {
                     gain = self
@@ -108,7 +111,7 @@ impl WracGainAudioProcessor {
             }
         }
 
-        // 最後の event 以降、ブロック末尾まで残った範囲を処理する。
+        // Process the remaining range from the last event to the end of the block.
         if segment_start < frames_count {
             let effective_gain = if bypass { 1.0 } else { gain };
             process_audio_range(
@@ -119,8 +122,8 @@ impl WracGainAudioProcessor {
             )?;
         }
 
-        // 入力が無音でなければ次のブロックも処理を続けてほしい、という宣言。
-        // `Quiet` を返すと host が optimization の判断材料に使う。
+        // Signal that processing should continue for the next block unless the input is silent.
+        // Returning `Quiet` lets the host use it as a hint for optimisation.
         Ok(ProcessStatus::ContinueIfNotQuiet)
     }
 }
@@ -130,10 +133,10 @@ fn assert_audio_layout_matches_processor_snapshot(
     audio: &mut AudioProcessBuffer<'_>,
     expected_channel_count: u32,
 ) {
-    // activate 時の snapshot と実 buffer が一致するかを debug build で確認するだけ。
-    // store の lock は読まない。memory safety を不正 buffer から守る責務は adapter
-    // 側にあり、これはその代替ではなく snapshot の使い方を示すデモ。channel count
-    // を使わない製品 DSP ならこの assertion ごと削ってよい。
+    // Debug-only verification that the actual buffer matches the activate-time snapshot.
+    // The store's lock is not read here. Protecting memory safety from invalid buffers
+    // is the adapter's responsibility; this is a demonstration of snapshot usage, not a
+    // replacement. Product DSPs that don't use channel count may remove this assertion entirely.
     debug_assert_eq!(
         audio.port_pair_count(),
         1,
@@ -152,8 +155,8 @@ fn assert_audio_layout_matches_processor_snapshot(
     }
 }
 
-/// 各 port の `[start, end)` 区間に gain を適用する。
-/// host が渡す buffer は `f32` / `f64` どちらもあり得るので両方扱う。
+/// Applies gain to the `[start, end)` range of each port.
+/// The buffer passed by the host can be either `f32` or `f64`, so both are handled.
 fn process_audio_range(
     audio: &mut AudioProcessBuffer<'_>,
     start: usize,
@@ -172,10 +175,10 @@ fn process_audio_range(
     Ok(())
 }
 
-/// 1 つの port (paired in/out) の各 channel について sample に gain を掛ける。
+/// Applies gain to each sample in every channel of one port (paired in/out).
 ///
-/// `map_samples_range` は in-place 書き換えで、in/out が同じ buffer を指す
-/// "in-place processing" にも対応している。
+/// `map_samples_range` operates in-place and supports "in-place processing"
+/// where the input and output point to the same buffer.
 fn process_channels_range<T>(
     channels: AudioPairedChannels<'_, T>,
     start: usize,

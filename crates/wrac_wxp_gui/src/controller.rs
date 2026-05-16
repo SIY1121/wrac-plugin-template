@@ -22,11 +22,11 @@ pub struct GuiSizeLimits {
     pub max: GuiSize,
 }
 
-/// wxp WebView runtime を [`PluginGui`] として公開する Send/Sync controller。
+/// Send/Sync controller that exposes the wxp WebView runtime as a [`PluginGui`].
 ///
-/// 実 runtime は UI thread の TLS 上に保持し、この型は CLAP instance から共有される
-/// [`PluginGui`] handle として GUI lifecycle callback を受ける。現在は host parent に
-/// child view として貼る embedded GUI のみ対応し、floating window は拒否する。
+/// The actual runtime lives in TLS on the UI thread; this type receives GUI lifecycle
+/// callbacks as the [`PluginGui`] handle shared across CLAP instances. Only embedded GUI
+/// (attached as a child view to the host parent) is supported; floating windows are rejected.
 pub struct WxpGuiController {
     factory: Arc<dyn WxpGuiFactory>,
     layout: Arc<HostGuiLayout>,
@@ -35,11 +35,12 @@ pub struct WxpGuiController {
 }
 
 struct HostGuiLayout {
-    // CLAP layout query が GUI runtime に入らず読む host 契約値 (runtime の複製ではない)。
+    // Host-contract size value read by CLAP layout queries without entering the GUI runtime
+    // (not a copy of the runtime state).
     accepted_size: AtomicGuiSize,
-    // 一部 wrapper は `request_resize()` の中から `set_size()` を再入で呼び (戻り値は
-    // false でも)。この revision で、runtime lock も戻り値の推測も無しに
-    // 「host が確定したサイズ」を request 側が検出できる。
+    // Some wrappers call `set_size()` re-entrantly from within `request_resize()` (even
+    // when the return value is false). This revision counter lets the request side detect
+    // "the size the host confirmed" without holding the runtime lock or guessing the return value.
     accepted_size_revision: AtomicU64,
     limits: GuiSizeLimits,
     resize_policy: GuiResizePolicy,
@@ -47,27 +48,30 @@ struct HostGuiLayout {
 
 struct GuiRuntimeState {
     session: Option<GuiSession>,
-    // editor の開閉を連打すると create/set_parent/show/destroy が高速に来る。
-    // WebView 作成は GUI run loop に post するので callback が元の CLAP 呼び出し
-    // 後に届く。generation で遅れた callback が stale session を検出し、閉じた
-    // editor に繋がず作りかけ runtime を畳めるようにする。
+    // Rapid open/close of the editor sends create/set_parent/show/destroy in quick
+    // succession. WebView creation is posted to the GUI run loop, so the callback arrives
+    // after the originating CLAP call returns. The generation counter lets a delayed
+    // callback detect a stale session and tear down the half-created runtime without
+    // attaching it to an already-closed editor.
     generation: u64,
     last_runtime_destroyed_at: Option<Instant>,
-    // Windows host (特に Ableton Live) は前回 teardown 中に editor を再生成し得る。
-    // child WebView 作成を single-flight にし、最新要求 generation だけ覚える。
+    // Some Windows hosts (notably Ableton Live) may recreate the editor while the
+    // previous teardown is still in progress. Keep child WebView creation single-flight
+    // and remember only the latest requested generation.
     is_creating_runtime: bool,
     creating_generation: Option<u64>,
     pending_creation_generation: Option<u64>,
     destroy_requested_while_creating: bool,
 }
 
-// runtime 破棄後の静止期間。これが無いと editor 連打時、前回 teardown 完了前に
-// 次の child WebView を要求してしまう。
+// Quiet period after runtime teardown. Without it, rapid editor reopens can request a
+// new child WebView before the previous teardown completes.
 const WEBVIEW_RECREATE_QUIET_PERIOD: Duration = Duration::from_millis(500);
 
-// CLAP の `create()` は GUI session の開始だが、embedded WebView の native child は
-// parent handle がないと作れない。session と runtime を分けることで、`create()` 後の
-// size/scale query には答えつつ、parent が来るまで native object 作成を遅延できる。
+// CLAP `create()` starts a GUI session, but an embedded WebView's native child cannot
+// be created without a parent handle. Separating session from runtime allows size/scale
+// queries to be answered after `create()` while deferring native object creation until
+// the parent arrives.
 struct GuiSession {
     generation: u64,
     configuration: GuiConfiguration,
@@ -148,9 +152,10 @@ fn schedule_runtime_creation(
     layout: Arc<HostGuiLayout>,
     generation: u64,
 ) -> PluginResult<()> {
-    // CLAP GUI callback とは意図的に非同期にする。inline で WebView を作ると host
-    // lifecycle の再入が起きやすい。run loop に post すれば、作成の直列化・保留中の
-    // visibility/size 適用・stale generation 破棄を 1 か所に集約できる。
+    // Intentionally asynchronous with CLAP GUI callbacks. Creating a WebView inline
+    // makes host lifecycle re-entry more likely. Posting to the run loop centralizes
+    // creation serialization, pending visibility/size application, and stale-generation
+    // teardown in one place.
     let (configuration, parent) = {
         let mut state = runtime.lock();
         if state.is_creating_runtime {
@@ -575,20 +580,20 @@ impl WxpGuiResizeHandle {
         let resize_result = host_gui_resize_requester.request_resize(gui_size);
         let current_revision = self.layout.accepted_size_revision();
 
-        // Logic の AUv2 wrapper は `request_resize()` 中に NSView frame を適用し
-        // `set_size()` を再入で呼んだ上で CLAP には false を返す。この再入 `set_size()`
-        // を真実とみなす。ここで楽観的に WebView を resize すると host と geometry を
-        // 奪い合い、grip ドラッグ中に視覚的な揺れが出る。
+        // Logic's AUv2 wrapper applies the NSView frame inside `request_resize()`, calls
+        // `set_size()` re-entrantly, and then returns false to CLAP. Treat that re-entrant
+        // `set_size()` as the ground truth. Optimistically resizing the WebView here would
+        // race geometry with the host and cause visual jitter during grip dragging.
         if current_revision != previous_revision {
             return Ok(self.layout.accepted_size());
         }
 
         match resize_result {
             Ok(()) => {
-                // request を受理しても即 `set_size()` を呼ばない host がある。その場合は
-                // plugin 側で WebView を更新し、任意 callback を待たず resize する。
-                // command には native owner ではなく `WebViewDispatch` を渡す。閉じかけ
-                // editor の寿命を延ばさずに command handler から resize できる。
+                // Some hosts accept the request but never call `set_size()`. In that case,
+                // update the WebView directly without waiting for an async callback.
+                // Pass `WebViewDispatch` rather than the native owner so the command handler
+                // can resize without extending the lifetime of a closing editor.
                 let scale = *self.scale.lock();
                 web_view
                     .post_set_bounds(DpiConverter::new(scale).create_webview_bounds(logical_size))
@@ -597,8 +602,9 @@ impl WxpGuiResizeHandle {
                 Ok(gui_size)
             }
             Err(error) => {
-                // 本当の拒否は上の AUv2 再入ケースとは別。child WebView を投機的に
-                // 動かして後で戻すより、host 確定済みの最後のサイズを保つ。
+                // A genuine rejection is distinct from the AUv2 re-entry case above. Rather
+                // than speculatively moving the child WebView and rolling it back, keep the
+                // last host-confirmed size.
                 Err(error)
             }
         }
@@ -683,8 +689,9 @@ impl PluginGui for WxpGuiController {
                 parent: None,
                 parent_lease: None,
                 handle: None,
-                // 一部 wrapper は embedded view を parent に付けた時点で表示扱いにし、`show()`
-                // を呼ばない。初回 parent attach は表示状態として扱い、明示的な `hide()` を優先する。
+                // Some wrappers treat attachment to the parent as an implicit show and never
+                // call `show()`. Default to visible so the first parent attach works; an
+                // explicit `hide()` overrides this.
                 visible: true,
             });
             generation
@@ -752,10 +759,11 @@ impl PluginGui for WxpGuiController {
                 .and_then(|session| session.handle.clone())
         };
 
-        // editor window が落ち着くまで同じ size を再送する host がある。同一 bounds の
-        // 再適用は契約を変えないが、child view に冗長な geometry 処理を与え、resize
-        // ドラッグが pointer に遅れて感じる。それでも下で size は記録し、再入
-        // `request_resize()` 検出が host callback を観測できるようにする。
+        // Some hosts repeatedly send the same size until the editor window settles.
+        // Re-applying identical bounds does not violate the contract but adds redundant
+        // geometry processing to the child view, making resize drags feel laggy. Size is
+        // still recorded below so re-entrant `request_resize()` detection can observe
+        // host callbacks.
         if let Some(handle) = handle {
             if size_changed {
                 handle.set_size(size)?;
@@ -798,8 +806,8 @@ impl PluginGui for WxpGuiController {
                 drop(parent_lease);
                 return Err(PluginError::InvalidState);
             }
-            // parent handle が変わると、既存 child WebView を安全に reparent できる保証が
-            // wxp/wry 側にない。古い runtime を先に落として、新しい parent 上に作り直す。
+            // wxp/wry gives no guarantee that an existing child WebView can be safely
+            // reparented. Tear down the old runtime first and recreate it on the new parent.
             session.handle.take()
         };
         if let Some(handle) = old_handle {
@@ -829,9 +837,10 @@ impl PluginGui for WxpGuiController {
             session.parent_lease = Some(parent_lease);
         }
         drop(state);
-        // ここは parent を受理して WebView 作成を予約するだけ。実作成を host
-        // lifecycle callback から外すことで create/destroy 再入を避ける。失敗時は
-        // log だけ残し runtime 無しの session にして、後の show/set_parent で再予約させる。
+        // Only accept the parent and schedule WebView creation here. Deferring actual
+        // creation outside the host lifecycle callback avoids create/destroy re-entry.
+        // On failure, leave the session without a runtime and let a subsequent
+        // show/set_parent reschedule it.
         self.schedule_runtime_creation(generation)?;
         log::debug!("wxp controller: set_parent completed");
         Ok(())
@@ -916,8 +925,8 @@ fn drop_session(session: Option<GuiSession>) -> bool {
             handle.destroy();
             destroyed_runtime = true;
         }
-        // runtime drop が終わってから parent lease を解放する。timer stop や WebView teardown が
-        // run loop 上で完了する前に owner thread を解放しないため。
+        // Release the parent lease only after the runtime has been dropped, so the owner
+        // thread is not freed before timer stop and WebView teardown complete on the run loop.
         drop(session.parent_lease.take());
         log::debug!("wxp controller: drop_session completed");
         destroyed_runtime

@@ -13,9 +13,9 @@ pub(super) static STATE: clap_plugin_state = clap_plugin_state {
 
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 
-// state callback は host format により active 中にも来る。ここで lifecycle 用の
-// `PluginCore` write lock を待つ/諦めると、project save が欠落し得るため、instance 作成時に
-// 固定した thread-safe state capability だけを呼ぶ。
+// State callbacks may arrive while the plugin is active, depending on the host format.
+// Waiting for or giving up on the `PluginCore` write lock here could silently drop a project save,
+// so only the thread-safe state capability fixed at instance creation is called.
 unsafe extern "C" fn state_save(plugin: *const clap_plugin, stream: *const clap_ostream) -> bool {
     ffi_bool(|| {
         if stream.is_null() {

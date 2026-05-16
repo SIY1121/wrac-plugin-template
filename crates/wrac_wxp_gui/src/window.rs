@@ -8,8 +8,9 @@ use raw_window_handle::{
 };
 use wrac_clap_adapter::{ClapWindow, PluginError, PluginResult};
 
-/// host の親 window を `raw-window-handle` として公開する wrapper。
-/// platform 分岐と handle lifetime をここで一度だけ吸収し、製品へ漏らさない。
+/// Wrapper that exposes the host parent window as a `raw-window-handle`.
+/// Platform branching and handle lifetime concerns are absorbed here once and
+/// kept out of product code.
 #[derive(Debug)]
 pub struct ParentWindowHandle {
     raw: RawWindowHandle,
@@ -73,9 +74,9 @@ impl StoredParentWindow {
 
 impl HasWindowHandle for ParentWindowHandle {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        // 安全性: `ParentWindowHandle` は CLAP `set_parent()` で渡された handle から作る。
-        // 実体の lifetime は host の parent window 契約に従い、この wrapper は WebView
-        // 作成と後続 resize のためだけに使う。
+        // Safety: `ParentWindowHandle` is constructed from the handle passed in CLAP
+        // `set_parent()`. The underlying lifetime is governed by the host's parent window
+        // contract; this wrapper is used only for WebView creation and subsequent resize.
         Ok(unsafe { WindowHandle::borrow_raw(self.raw) })
     }
 }

@@ -98,8 +98,8 @@ if (
 }
 
 const buildType = import.meta.env.PROD ? "Release" : "Debug";
-// About に出す identity は Vite が src-plugin/Cargo.toml から埋め込んだ値だけを使う。
-// テンプレート利用者が plugin を改名した時に、Rust descriptor と GUI 表示が分岐しないようにする。
+// Identity shown in About uses only values injected by Vite from src-plugin/Cargo.toml.
+// This prevents the Rust descriptor and the GUI display from diverging when the template user renames the plugin.
 pluginName.textContent = __WRAC_PLUGIN_METADATA__.pluginName;
 aboutTitle.textContent = __WRAC_PLUGIN_METADATA__.pluginName;
 aboutPluginName.textContent = __WRAC_PLUGIN_METADATA__.pluginName;
@@ -222,8 +222,8 @@ void (async () => {
     },
   );
   editorPageSubscriptionId = editorPageSubscription.subscriptionId;
-  // WebView console に頼らず、native log だけで frontend 初期化完了を確認できるようにする。
-  // DAW 上の plugin GUI では devtools を開けない環境があるため、この境界ログを残す。
+  // Log frontend initialization to the native log without relying on the WebView console.
+  // Some environments inside a DAW do not allow opening devtools, so this boundary log is preserved.
   await invoke("write_to_log", {
     message: "GUI initialization completed",
   });
@@ -449,15 +449,17 @@ gainInput.addEventListener("keydown", (event) => {
 });
 gainInput.addEventListener("pointerdown", (event) => event.stopPropagation());
 
-// About は設定画面ではなく plugin identity の詳細表示なので、常設タブではなく
-// plugin 名そのものを入口/切り替えにする。メイン操作面の余計な segmented control を避けるため。
+// About is a detail view of plugin identity rather than a settings screen, so the plugin name
+// itself is used as the entry point/toggle instead of a permanent tab, to avoid an extra
+// segmented control on the main controls surface.
 pluginName.addEventListener("click", (event) => {
   setEditorPage(pageAbout.hidden ? "about" : "controls");
   restoreHostFocusIfNeeded(event.target);
 });
 
-// About は full-screen modal 相当の一時表示なので、右上の明示的な close affordance で戻す。
-// 中央の plugin 名は情報表示に留め、閉じる操作と混同させない。
+// About is a temporary overlay equivalent to a full-screen modal, so the explicit close
+// affordance in the top-right returns to controls. The plugin name in the center is kept
+// as an information display only, to avoid conflating it with the close action.
 headerAction.addEventListener("click", (event) => {
   setEditorPage("controls");
   restoreHostFocusIfNeeded(event.target);

@@ -3,9 +3,9 @@ use clap_sys::process::clap_process;
 
 use crate::{AudioBufferError, AudioProcessBuffer};
 
-// CLAP の audio buffer 配列は callback 中だけ有効です。ここでは port/channel の解釈を
-// せず、callback lifetime に縛った slice へ変換する。alias 判定や sample type 判定は
-// `AudioProcessBuffer` 側で必要になったタイミングにまとめる。
+// CLAP audio buffer arrays are valid only for the duration of the callback. Here they are
+// converted to slices bound to the callback lifetime without interpreting port or channel layout.
+// Alias detection and sample type checks are deferred to `AudioProcessBuffer` as needed.
 pub(super) unsafe fn audio_buffers(
     process: &clap_process,
 ) -> Result<AudioProcessBuffer<'_>, AudioBufferError> {

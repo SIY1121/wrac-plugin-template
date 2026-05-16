@@ -1,10 +1,10 @@
-//! 製品実装と adapter の間の safe なインターフェース。
+//! Safe interface between product implementations and the adapter.
 //!
-//! 設計の前提を 1 つだけ覚えておけば全 trait の doc が読める:
-//! **clap-wrapper 経由の VST3/AU/AAX では CLAP の `[main-thread]` 注釈や
-//! lifecycle 順序がそのまま守られない**。そのため query 系 trait は `&self` で、
-//! 任意 thread から並行に呼ばれても答えられる実装を要求する。FFI・raw pointer・
-//! panic 遮断は adapter 内部に閉じ、製品はこの safe trait だけを実装すればよい。
+//! One design assumption unlocks all trait docs: **VST3/AU/AAX via clap-wrapper does
+//! not preserve CLAP `[main-thread]` annotations or lifecycle ordering.** Query traits
+//! therefore take `&self` and must be answerable from any thread concurrently. FFI,
+//! raw pointers, and panic barriers are contained inside the adapter; products only
+//! need to implement these safe traits.
 
 use std::error::Error;
 use std::ffi::{CStr, c_void};
@@ -54,26 +54,28 @@ impl From<AudioBufferError> for PluginError {
     }
 }
 
-/// instance ごとに adapter から製品 core へ渡す環境。
+/// Per-instance environment passed from the adapter to the product core.
 ///
-/// FFI pointer を直接渡さず、製品が安全に保持できる adapter proxy だけを入れる。
+/// Contains only adapter proxies that the product can hold safely, not raw FFI pointers.
 #[derive(Clone)]
 pub struct PluginCoreContext {
     pub host_parameter_edit_notifier: Arc<dyn HostParameterEditNotifier>,
     pub host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
 }
 
-/// GUI 操作などで起きた parameter edit を host automation へ通知する。
+/// Notifies the host automation lane of a parameter edit triggered by the GUI or other
+/// product-side action.
 ///
-/// SoT を更新する API ではない。製品が自分の store を先に更新し、その edit を
-/// host へ返すために呼ぶ (begin → update → end が 1 つの undo 単位)。
+/// This is not an API to update the source of truth. The product updates its own store
+/// first, then calls this to report the edit back to the host
+/// (begin → update → end forms one undo unit).
 pub trait HostParameterEditNotifier: Send + Sync {
     fn begin_edit(&self, parameter_id: u32);
     fn update_edit(&self, parameter_id: u32, value: f64);
     fn end_edit(&self, parameter_id: u32);
 }
 
-/// GUI など製品側操作から host へ GUI client area の resize を要求する。
+/// Requests the host to resize the GUI client area on behalf of the product (e.g., from the GUI).
 pub trait HostGuiResizeRequester: Send + Sync {
     fn request_resize(&self, size: GuiSize) -> PluginResult<()>;
 }
@@ -111,8 +113,8 @@ pub struct NotePortInfo {
     pub name: &'static str,
 }
 
-/// CLAP note dialect bitset の薄い Rust 表現。
-/// host とどの note dialect を送受信できるかを note-ports extension で交渉する値。
+/// Thin Rust representation of the CLAP note dialect bitset.
+/// Used in the note-ports extension to negotiate which note dialects can be sent and received.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NoteDialects(u32);
 
@@ -217,8 +219,8 @@ pub struct GuiResizeHints {
     pub aspect_ratio_height: u32,
 }
 
-/// CLAP `clap_window_t` の薄い Rust 表現。
-/// toolkit 中立にするため、特定 toolkit の型へは変換しない。
+/// Thin Rust representation of `clap_window_t`.
+/// Does not convert to toolkit-specific types in order to remain toolkit-neutral.
 #[derive(Debug, Clone, Copy)]
 pub enum ClapWindow {
     Cocoa { ns_view: NonNull<c_void> },
@@ -246,75 +248,78 @@ impl ClapWindow {
     }
 }
 
-/// 1 plugin instance の lifecycle と capability の入口。
+/// Entry point for a single plugin instance's lifecycle and capabilities.
 ///
-/// ここに全 state を集めない。`&mut self` の `activate`/`deactivate` と、並行に
-/// 呼ばれる parameter/state/GUI の query を同じ mutable state に集めると、片方の
-/// 実行中にもう片方へ答えられなくなる。各 capability は専用の thread-safe store に
-/// 分け、この trait からは `Arc<dyn …>` で返すのが推奨形 (実例は `src-plugin`)。
+/// Do not concentrate all state here. Placing `&mut self` `activate`/`deactivate` and
+/// concurrently-called parameter/state/GUI queries in the same mutable state would make
+/// it impossible to answer one while the other is running. Split each capability into
+/// its own thread-safe store and return it as `Arc<dyn …>` from this trait (see
+/// `src-plugin` for examples).
 pub trait PluginCore: Send + Sync + 'static {
     fn activate(&mut self, context: ActivateContext) -> PluginResult<Box<dyn Processor>>;
     fn deactivate(&mut self, processor: Box<dyn Processor>) -> PluginResult<()>;
 
-    /// audio port query の capability。adapter が instance 作成時に Arc を保持し、
-    /// 以降 `PluginCore` を借用せず呼ぶ (並行 read できる store に置くこと)。
+    /// Capability for audio port queries. The adapter holds the Arc at instance creation
+    /// and calls it without borrowing `PluginCore` thereafter (store in a parallel-readable store).
     fn audio_ports(&self) -> Option<Arc<dyn PluginAudioPorts>> {
         None
     }
 
-    /// host からの port layout 変更要求を扱う capability。
+    /// Capability for handling host-initiated port layout change requests.
     ///
-    /// `&self` だが active 中に変えてよい訳ではない。adapter は processor 存在中や
-    /// lifecycle callback 中の apply を拒否する。実装は「次回 activate 用の layout」を
-    /// non-realtime store に記録するだけにし、`activate()` で snapshot して
-    /// [`Processor`] に渡す (processor 生存中は契約不変、と構造で示せる)。
+    /// Takes `&self` but must not be changed while active. The adapter rejects apply
+    /// calls while a Processor exists or during lifecycle callbacks. Implementations
+    /// should only record the "layout for the next activate" in a non-realtime store,
+    /// snapshot it in `activate()`, and pass it to the [`Processor`] (making the
+    /// invariant explicit in the structure: layout is stable while a processor lives).
     fn configurable_audio_ports(&self) -> Option<Arc<dyn PluginConfigurableAudioPorts>> {
         None
     }
 
-    /// note port query の capability。count/dialect は host の routing 判断に使われる。
-    /// lifecycle の busy 状態に左右されない schema store から答えること。
+    /// Capability for note port queries. Count and dialect inform the host's routing
+    /// decisions. Answer from a schema store unaffected by lifecycle busy state.
     fn note_ports(&self) -> Option<Arc<dyn PluginNotePorts>> {
         None
     }
 
-    /// parameter schema/value と flush 時 input を扱う capability。
+    /// Capability for parameter schema/values and input during flush.
     ///
-    /// automation・generic editor・restore 後 rescan から並行に触られる。schema は
-    /// immutable、現在値は atomic/seqlock に置き、GUI/project state の lock を
-    /// ここから辿らないこと。
+    /// Accessed concurrently from automation, generic editors, and post-restore rescans.
+    /// Schema is immutable; current values live in atomics or a seqlock. Do not reach
+    /// into GUI or project state locks from here.
     fn parameters(&self) -> Option<Arc<dyn PluginParameters>> {
         None
     }
 
-    /// project state の save/restore を扱う capability。ユーザーデータを守る経路。
-    /// 再生中・automation 中に呼ばれても committed snapshot を返せること
-    /// (`&mut self` 依存にすると host が retry しない場合に編集を失う)。
+    /// Capability for project state save/restore — the path that guards user data.
+    /// Must return a committed snapshot even when called during playback or automation
+    /// (relying on `&mut self` risks losing edits when the host does not retry).
     fn state(&self) -> Option<Arc<dyn PluginStateSupport>> {
         None
     }
 
-    /// GUI を扱う capability。backend は thread affinity が強い。adapter は
-    /// callback を UI thread へ marshal しないので、その契約は実装側で守る。
+    /// Capability for the GUI. The backend has strong thread affinity. The adapter does
+    /// not marshal callbacks to the UI thread; that contract must be upheld by the implementation.
     fn gui(&self) -> Option<Arc<dyn PluginGui>> {
         None
     }
 }
 
-/// CLAP audio-ports extension。host が routing/bus layout を決める metadata を返す。
-/// 任意 thread から並行に呼ばれる read 専用 API。busy 状態で値が揺れると host が
-/// 正しく配線できないので、安定した値を返すこと。
+/// CLAP audio-ports extension. Returns metadata the host uses to determine routing and
+/// bus layout. This is a read-only API called concurrently from any thread. Return
+/// stable values — fluctuating under busy state prevents the host from wiring correctly.
 pub trait PluginAudioPorts: Send + Sync + 'static {
     fn audio_port_count(&self, is_input: bool) -> u32;
     fn audio_port_info(&self, index: u32, is_input: bool) -> Option<AudioPortInfo>;
 }
 
-/// CLAP configurable-audio-ports extension。「inactive 時に次回 activate 用の
-/// layout store を更新する」API として実装する。file IO・GUI callback・audio が
-/// 待つ lock には入らないこと。
+/// CLAP configurable-audio-ports extension. Implement as "update the layout store for
+/// the next activate when inactive." Do not enter locks that file IO, GUI callbacks, or
+/// audio threads wait on.
 ///
-/// VST3/AU wrapper は host の speaker arrangement をこれに対応付ける。対応 layout を
-/// 受け入れないと wrapper の buffer channel 数と合わず、process が呼ばれないことがある。
+/// VST3/AU wrappers map the host's speaker arrangement through this extension. Rejecting
+/// a supported layout can mismatch the wrapper's buffer channel count, causing process
+/// to not be called.
 pub trait PluginConfigurableAudioPorts: Send + Sync + 'static {
     fn can_apply_audio_port_configuration(
         &self,
@@ -327,21 +332,22 @@ pub trait PluginConfigurableAudioPorts: Send + Sync + 'static {
     ) -> PluginResult<()>;
 }
 
-/// CLAP note-ports extension。note event 自体は process stream に流れるが、
-/// port 数と dialect は host が先に query する。audio ports 同様、immutable schema /
-/// 軽量 read-only store から答えること。
+/// CLAP note-ports extension. Note events themselves flow in the process stream, but
+/// port count and dialect are queried by the host up front. As with audio ports, answer
+/// from an immutable schema or lightweight read-only store.
 pub trait PluginNotePorts: Send + Sync + 'static {
     fn note_port_count(&self, is_input: bool) -> u32;
     fn note_port_info(&self, index: u32, is_input: bool) -> Option<NotePortInfo>;
 }
 
-/// CLAP params extension。schema と現在値を host が任意 thread から読める前提で設計する。
-/// 特に `parameter_value` / `apply_parameter_value` は automation/flush と audio processing の
-/// 境界に近いので、audio thread が待つ lock を共有しない store に寄せる。
+/// CLAP params extension. Design assuming the host reads schema and current values from
+/// any thread. In particular, `parameter_value` / `apply_parameter_value` sit close to
+/// the automation/flush and audio processing boundary, so keep them in a store that does
+/// not share locks the audio thread waits on.
 pub trait PluginParameters: Send + Sync + 'static {
     fn parameter_count(&self) -> u32;
     fn parameter_info(&self, index: u32) -> Option<ParameterInfo>;
-    /// parameter の現在の plain value (CLAP `get_value` 相当)。
+    /// Current plain value of a parameter (equivalent to CLAP `get_value`).
     fn parameter_value(&self, parameter_id: u32) -> PluginResult<f64>;
     fn apply_parameter_value(&self, event: ParameterValueEvent) -> PluginResult<f64>;
     fn parameter_value_to_text(&self, parameter_id: u32, value: f64) -> PluginResult<String>;
@@ -359,25 +365,27 @@ pub struct ParameterValueEvent {
     pub key: i16,
 }
 
-/// CLAP state extension。[`PluginCore`] lifecycle から独立した project state 境界として
-/// 実装する (host は active 中にも save/restore し得る)。
+/// CLAP state extension. Implement as a project state boundary independent of the
+/// [`PluginCore`] lifecycle (the host may save/restore while active).
 ///
-/// `save_state` は committed snapshot を**短時間で**返す。lock 中に serialize/file IO/
-/// GUI dispatch を挟むと host の project save を詰まらせる。`restore_state` は decode 済み
-/// state を SoT に commit する。audio と共有する値は realtime-safe store、editor-only は
-/// project store、と state の種類で同期境界を分けるのが定石。
+/// `save_state` must return a committed snapshot **quickly**. Serializing, doing file IO,
+/// or dispatching to the GUI while holding a lock will stall the host's project save.
+/// `restore_state` commits the decoded state to the source of truth. The standard
+/// pattern is to split sync boundaries by state kind: realtime-safe store for audio-shared
+/// values, project store for editor-only values.
 pub trait PluginStateSupport: Send + Sync + 'static {
     fn save_state(&self) -> PluginResult<PluginState>;
     fn restore_state(&self, state: PluginState) -> PluginResult<()>;
 }
 
-/// CLAP gui extension。GUI backend の thread affinity はこの trait 内で守る
-/// (adapter は callback を UI thread へ marshal しない)。
+/// CLAP gui extension. GUI backend thread affinity must be enforced within this trait
+/// (the adapter does not marshal callbacks to the UI thread).
 ///
-/// `get_size`/`can_resize`/`resize_hints` は host の layout 計算中に再入し得る。
-/// cached size や static hints から答え、重い mutation に入らないこと。
-/// `create`/`destroy`/`set_parent` は adapter が再入 guard するが、backend 固有の
-/// lifecycle 制約までは隠せない (必要なら controller 内に command queue を持つ)。
+/// `get_size`/`can_resize`/`resize_hints` may be re-entered during host layout
+/// computation. Answer from cached size or static hints without entering heavy mutations.
+/// `create`/`destroy`/`set_parent` are re-entry-guarded by the adapter, but
+/// backend-specific lifecycle constraints are not hidden (use a command queue inside the
+/// controller if needed).
 pub trait PluginGui: Send + Sync + 'static {
     fn is_api_supported(&self, api: GuiApi, is_floating: bool) -> bool;
     fn preferred_api(&self) -> Option<GuiConfiguration>;
@@ -396,12 +404,12 @@ pub trait PluginGui: Send + Sync + 'static {
     fn hide(&self) -> PluginResult<()>;
 }
 
-/// audio thread で動く processing object。
+/// Processing object that runs on the audio thread.
 ///
-/// `PluginCore` と分けてあるのは、audio callback を core の write lock や
-/// GUI/project state から切り離すため。渡す state は activate 時に copy した
-/// immutable 設定か、audio thread が待たない atomic/lock-free 共有のみ
-/// (`Arc<Mutex<_>>` を渡す場合も process 中に lock しない設計にする)。
+/// Kept separate from `PluginCore` to decouple the audio callback from the core's write
+/// lock and from GUI/project state. State passed in must be either an immutable snapshot
+/// copied at activate time, or atomic/lock-free shared state the audio thread never
+/// waits on (even when passing `Arc<Mutex<_>>`, design it so process() never locks).
 pub trait Processor: Send {
     fn reset(&mut self) {}
     fn process(&mut self, context: ProcessContext<'_>) -> PluginResult<ProcessStatus>;

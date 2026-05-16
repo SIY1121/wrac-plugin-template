@@ -1,49 +1,49 @@
 # wrac_clap_adapter
 
-各製品コードが実装するべき trait 群を定義し、
-その trait 実装を CLAP ABI に適合させ、プラグインとして利用可能にするアダプターを提供します。
+Defines the traits that each product crate must implement,
+and provides an adapter that maps those trait implementations to the CLAP ABI so they can be used as a plugin.
 
-VST3 / AU / AAX への変換は `clap-wrapper` の責務で、本 crate は CLAP plugin および CLAP extension を Rust 側で実装することに専念します。
+Conversion to VST3 / AU / AAX is the responsibility of `clap-wrapper`. This crate focuses solely on implementing CLAP plugins and CLAP extensions on the Rust side.
 
-## 目的
+## Purpose
 
-CLAP プラグインを clap-wrapper 経由で他フォーマットのホストから利用する場合、 CLAP の定義するスレッドモデルや呼び出し順序の契約が一部守られない場合があります。それらに対して防御的な機構で対応することを目的としています。
+When using a CLAP plugin through clap-wrapper with a VST3/AU/AAX host, certain contracts defined by CLAP's thread model and call-order guarantees may not be honored. This crate aims to handle those cases defensively.
 
-## clack との違い
+## Differences from clack
 
-CLAP のヘッダには、各関数を呼び出してよい thread が `[main-thread]` `[audio-thread]` `[thread-safe]` といったコメントで示されています。例えば `init` は `[main-thread]`、`process` は `[audio-thread]`、`get_extension` は `[thread-safe]` です。
+The CLAP headers annotate the allowed thread for each function using comments such as `[main-thread]`, `[audio-thread]`, and `[thread-safe]`. For example, `init` is `[main-thread]`, `process` is `[audio-thread]`, and `get_extension` is `[thread-safe]`.
 
-`clack` は host がこのコメント通りに関数を呼び出す前提で型を設計しており、Native CLAP host 向けには素直に動作します。
+`clack` is designed assuming the host calls functions according to these annotations, and works straightforwardly with native CLAP hosts.
 
-一方、本 crate は `clap-wrapper` 経由の VST3 / AU / AAX host も対象とします。これらの host を経由すると、`[main-thread]` 指定の query が別 thread から呼ばれるなど、コメント通りの呼び出し順・呼び出し thread にならない場合があります。本 crate はこれを adapter 側の lock や panic 捕捉などで受け、製品コードに `unsafe` を露出させずに動作させることを目的としています。
+This crate, on the other hand, also targets VST3/AU/AAX hosts via `clap-wrapper`. When routing through those hosts, annotated `[main-thread]` queries may be called from a different thread, among other deviations from the spec. This crate handles such cases through locks and panic catching on the adapter side, so that product code never exposes `unsafe` and still operates correctly.
 
-## 謝辞
+## Acknowledgements
 
-`wrac_clap_adapter` は、`clack` の safe で low-level な CLAP wrapper 設計、特に CLAP extension 境界と audio buffer access の考え方を参考にさせていただきました。本 crate は `clack` のコードの派生ではなく、`clap-sys` を直接用いた独立した実装です。
+`wrac_clap_adapter` is inspired by `clack`'s design for a safe, low-level CLAP wrapper — in particular, its approach to CLAP extension boundaries and audio buffer access. This crate is not derived from `clack`'s code; it is an independent implementation built directly on `clap-sys`.
 
 ## Public API
 
-- `PluginCore`: instance lifecycle と、サポートする extension の宣言
+- `PluginCore`: instance lifecycle and declaration of supported extensions
 - `PluginAudioPorts`: CLAP `audio-ports`
 - `PluginConfigurableAudioPorts`: CLAP `configurable-audio-ports`
 - `PluginNotePorts`: CLAP `note-ports`
 - `PluginParameters`: CLAP `params`
 - `PluginStateSupport`: CLAP `state`
 - `PluginGui`: CLAP `gui`
-- `export_clap_plugin!`: CLAP entry point の export
+- `export_clap_plugin!`: exports the CLAP entry point
 
-各 trait は CLAP C ABI に対応する薄い Rust 表現です。独自の plugin framework としては設計しません。
+Each trait is a thin Rust representation of the corresponding CLAP C ABI. This crate is not designed as a general plugin framework.
 
-## 制約
+## Limitations
 
-この crate は汎用フレームワークではなく、実装例の一部として提供しています。今後の変更では、API の後方互換性やマイグレーションサポートは提供しません。
+This crate is provided as part of an implementation example, not as a general-purpose framework. Future changes will not provide API backwards compatibility or migration support.
 
-また、現時点では CLAP の全 ABI には対応できておらず、以下の制限があります。
+Additionally, full CLAP ABI coverage is not yet complete. Known limitations:
 
-- `audio-ports`: 現在の port metadata の公開のみ。port 構成の動的変更通知 (rescan) は未対応
-- `configurable-audio-ports`: 非 active 時の layout 交渉のみ対応
-- `params`: state restore 後の value rescan は対応するが、parameter schema 自体の動的 rescan API は未提供
-- raw MIDI bytes 向けの helper は未実装（note-ports 経由の note event のみ対応）
-- output event の batching helper は最小限（sample accurate な event 整列は製品側の責務）
-- `audio-ports-activation` extension は未実装
-- 複数 plugin を 1 binary から export する構成は未対応
+- `audio-ports`: exposes current port metadata only; dynamic port rescan notifications are not supported
+- `configurable-audio-ports`: only layout negotiation while inactive is supported
+- `params`: value rescan after state restore is supported, but a dynamic rescan API for the parameter schema itself is not provided
+- No helper for raw MIDI bytes (only note events via note-ports are supported)
+- Output event batching helpers are minimal (sample-accurate event ordering is the product's responsibility)
+- The `audio-ports-activation` extension is not implemented
+- Exporting multiple plugins from a single binary is not supported

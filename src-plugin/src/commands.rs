@@ -1,7 +1,8 @@
-//! WebView frontend から呼べる command の登録。
+//! Registration of commands callable from the WebView frontend.
 //!
-//! Rust 側から見ると、ここが TypeScript UI との約束事になる。command 名や payload
-//! の形を変えるときは `src-gui` 側の `invoke(...)` / subscription と一緒に変更する。
+//! From Rust's perspective this module is the contract with the TypeScript UI.
+//! When renaming commands or changing payload shapes, update the `invoke(...)` calls
+//! and subscriptions in `src-gui` at the same time.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -19,10 +20,10 @@ mod resize;
 
 use resize::register_resize_commands;
 
-/// WebView (フロントエンド) から呼べる command を [`WxpCommandHandler`] に登録する。
+/// Registers commands callable from the WebView frontend with the [`WxpCommandHandler`].
 ///
-/// フロントエンド側 (`src-gui` の TypeScript) は `invoke("set_parameter_value",
-/// { parameterId, value })` のような形でこれらの command を呼び出す。
+/// The frontend (TypeScript in `src-gui`) invokes these commands using calls like
+/// `invoke("set_parameter_value", { parameterId, value })`.
 pub(crate) fn register_commands(
     command_handler: Rc<WxpCommandHandler>,
     project_state: Arc<ProjectStateStore>,
@@ -32,16 +33,17 @@ pub(crate) fn register_commands(
     host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
     gui_resize_handle: WxpGuiResizeHandle,
 ) {
-    // WebView console は DAW では見えないことが多い。frontend のログを
-    // plugin 側 logger に橋渡しし、GUI 初期化の進行を native log で追えるようにする。
+    // The WebView console is often invisible inside a DAW. Bridge frontend logs to the
+    // plugin's logger so GUI initialisation progress is visible in native log output.
     command_handler.register_sync("write_to_log", move |ctx| {
         let message = ctx.arg::<String>("message").map_err(|e| e.to_string())?;
         log::info!("frontend: {message}");
         Ok::<_, String>(json!({ "ok": true }))
     });
 
-    // editor page は音に関係しない project state。audio thread が読む SharedState とは
-    // 別の store に置き、保存時に parameter snapshot と合成する。
+    // Editor page is project state unrelated to audio. It lives in a separate store from
+    // the SharedState read by the audio thread and is merged with the parameter snapshot
+    // at save time.
     {
         let project_state = project_state.clone();
         command_handler.register_sync("get_editor_page", move |_| {
@@ -62,7 +64,7 @@ pub(crate) fn register_commands(
         });
     }
 
-    // 現在の parameter 値を取得する。GUI 起動直後の初期表示などに使う。
+    // Returns the current parameter value. Used for initial display when the GUI launches.
     {
         let shared = shared.clone();
         command_handler.register_sync("get_parameter_state", move |ctx| {
@@ -74,7 +76,7 @@ pub(crate) fn register_commands(
         });
     }
 
-    // 表示文字列を Rust 側の parameter parser で plain value に戻して反映する。
+    // Converts a display string back to a plain value via the Rust parameter parser and applies it.
     {
         let shared = shared.clone();
         let gui_notifier = gui_notifier.clone();
@@ -98,7 +100,7 @@ pub(crate) fn register_commands(
         });
     }
 
-    // frontend が default 値を持たずに reset intent だけを送れるようにする。
+    // Allows the frontend to signal a reset without knowing the default value itself.
     {
         let shared = shared.clone();
         let gui_notifier = gui_notifier.clone();
@@ -121,7 +123,7 @@ pub(crate) fn register_commands(
         });
     }
 
-    // control に触れ始めたタイミング。host に「これから undo 単位」と伝える。
+    // Called when the user first touches a control. Signals the start of an undo unit to the host.
     {
         let host_parameter_edit_notifier = host_parameter_edit_notifier.clone();
         command_handler.register_sync("begin_parameter_gesture", move |ctx| {
@@ -131,7 +133,7 @@ pub(crate) fn register_commands(
         });
     }
 
-    // control が動いたタイミング。値を反映して host にも通知する。
+    // Called while the control is moving. Applies the value and notifies the host.
     {
         let shared = shared.clone();
         let gui_notifier = gui_notifier.clone();
@@ -152,7 +154,7 @@ pub(crate) fn register_commands(
         });
     }
 
-    // control から指を離したタイミング。undo 単位の終了を host に伝える。
+    // Called when the user releases the control. Signals the end of the undo unit to the host.
     {
         let host_parameter_edit_notifier = host_parameter_edit_notifier.clone();
         command_handler.register_sync("end_parameter_gesture", move |ctx| {
@@ -162,10 +164,11 @@ pub(crate) fn register_commands(
         });
     }
 
-    // parameter の変化を受け取る subscription を開始する。
-    // `channel` は JS 側で作った callback channel で、plugin はここに値の変化を push する。
-    // 戻り値の `subscriptionId` は購読の識別子。JS は cleanup 時にこの id を返すことで、
-    // 自分が始めた購読だけを確実に解除できる。
+    // Starts a subscription that receives parameter changes.
+    // `channel` is a callback channel created on the JS side; the plugin pushes value
+    // changes into it. The returned `subscriptionId` identifies the subscription so the
+    // JS side can unsubscribe precisely at cleanup, without cancelling subscriptions it
+    // didn't create.
     {
         let gui_notifier = gui_notifier.clone();
         command_handler.register_sync("subscribe_parameters", move |ctx| {
@@ -190,9 +193,9 @@ pub(crate) fn register_commands(
         });
     }
 
-    // subscription を解除する。指定の id が登録されていなければ no-op。
-    // id 指定にすることで、遅れて届いた古い cleanup が、後から始まった別の購読を
-    // 誤って解除してしまう事故を防げる。
+    // Cancels a subscription. If the given ID is not registered this is a no-op.
+    // Using an explicit ID prevents a delayed, stale cleanup from accidentally cancelling
+    // a subscription that was created later.
     {
         let gui_notifier = gui_notifier.clone();
         command_handler.register_sync("unsubscribe_gui_subscription", move |ctx| {

@@ -71,10 +71,11 @@ unsafe extern "C" {
 fn global_mouse_location() -> Option<GlobalMouseLocation> {
     #[cfg(target_os = "macos")]
     {
-        // resize grip は WebView 内にあるが、リサイズ対象の editor window は host が
-        // 所有する。Logic などはドラッグ中にその WebView を動かすため、WebView 座標は
-        // 物理マウスではなく動く子 view に対して飛んでしまう。OS カーソルを直接読めば、
-        // WebView と host の layout 更新の外にある安定した座標系 (デスクトップ) を使える。
+        // The resize grip lives inside the WebView, but the editor window being resized is
+        // owned by the host. Hosts such as Logic move the WebView during a drag, so WebView
+        // coordinates land relative to the moving child view rather than the physical mouse.
+        // Reading the OS cursor directly gives a stable coordinate space (the desktop) that
+        // is unaffected by WebView and host layout updates.
         let event = unsafe { CGEventCreate(std::ptr::null()) };
         if event.is_null() {
             return None;
@@ -98,11 +99,12 @@ pub(super) fn register_resize_commands(
     host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
     gui_resize_handle: WxpGuiResizeHandle,
 ) {
-    // resize ドラッグを 2 責務に分ける。ジェスチャの寿命は JS が持つ (pointer
-    // capture/release は browser の概念)。macOS の座標は Rust が持つ (browser の
-    // 座標系こそ host が動かしている面だから)。drag id がブラウザ側トリガと
-    // この native snapshot を結び付け、毎回の resize 要求を元のデスクトップ
-    // カーソル位置から再計算できる (WebView 内座標の誤差を累積しない)。
+    // Split resize dragging between two responsibilities. JS owns the gesture lifetime
+    // (pointer capture/release are browser concepts). Rust owns the macOS coordinates
+    // (because the browser coordinate space is exactly the surface the host is moving).
+    // The drag ID links the browser-side trigger to this native snapshot so that every
+    // resize request can be recomputed from the original desktop cursor position,
+    // avoiding accumulated error from WebView-relative coordinates.
     let native_resize_drag = Rc::new(RefCell::new(None::<NativeResizeDrag>));
 
     {

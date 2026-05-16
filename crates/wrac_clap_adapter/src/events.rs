@@ -14,10 +14,11 @@ use clap_sys::events::{
 
 use crate::api::ParameterValueEvent;
 
-/// `process()`/`flush()` の CLAP event list を callback lifetime に閉じ込める view。
+/// View that confines the CLAP event lists from `process()`/`flush()` to the callback lifetime.
 ///
-/// 実体は host 所有で callback 終了後は無効。raw pointer を製品へ渡さず typed enum に
-/// 寄せ、event を扱える範囲を audio callback 内に限定する。
+/// The underlying data is owned by the host and is invalid after the callback returns.
+/// Raw pointers are not exposed to the product; events are converted to typed enums so
+/// they can only be handled within the audio callback.
 pub struct ProcessEvents<'a> {
     pub input: InputEvents<'a>,
     pub output: OutputEvents<'a>,

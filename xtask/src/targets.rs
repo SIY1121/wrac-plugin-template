@@ -117,7 +117,7 @@ impl Platform {
     }
 
     pub(crate) fn default_build_targets(self) -> Vec<Target> {
-        // 無指定 build は「その OS で開発者が期待する全部」を作る。
+        // An unspecified build produces everything a developer would expect for that OS.
         match self {
             Self::Macos => vec![Target::Clap, Target::Vst3, Target::Au, Target::Standalone],
             Self::Windows => vec![Target::Clap, Target::Vst3, Target::Standalone],
@@ -134,7 +134,7 @@ impl Platform {
     }
 
     pub(crate) fn default_validate_targets(self) -> Vec<ValidateTarget> {
-        // validate は既に build 済みの plugin artifact を外部 validator で確認する command。
+        // validate runs external validators against already-built plugin artifacts.
         match self {
             Self::Macos => vec![
                 ValidateTarget::Clap,
@@ -240,8 +240,8 @@ pub(crate) fn resolve_validate_targets(
 }
 
 fn dedup<T: Copy + PartialEq>(targets: Vec<T>) -> Vec<T> {
-    // CLI では `--target=vst3,vst3` のような重複入力を許す。
-    // エラーにせず順序だけ保って重複排除し、script からの呼び出しを寛容にする。
+    // Allow duplicate inputs such as `--target=vst3,vst3` from the CLI.
+    // Deduplicate while preserving order rather than erroring, to be lenient toward script callers.
     let mut unique = Vec::new();
     for target in targets {
         if !unique.contains(&target) {

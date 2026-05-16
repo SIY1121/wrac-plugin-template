@@ -16,25 +16,25 @@ pub(crate) struct Context {
 
 impl Context {
     pub(crate) fn new() -> Result<Self> {
-        // cargo xtask は xtask crate の manifest から起動されるため、親 directory を repo root とする。
-        // current_dir に依存すると、別 directory から実行した時に artifact path がずれる。
+        // cargo xtask is invoked from the xtask crate's manifest, so the parent directory is the repo root.
+        // Relying on current_dir would misalign artifact paths when invoked from a different directory.
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(1)
             .ok_or("failed to locate repository root")?
             .to_path_buf();
-        // CARGO_TARGET_DIR は workspace や CI で共有 cache に向けられることがある。
-        // xtask が cargo と同じ target root を見ることで、build 後の library 検出を一致させる。
+        // CARGO_TARGET_DIR may be redirected to a shared cache in workspaces or CI.
+        // Using the same target root as cargo keeps post-build library detection consistent.
         let target_dir = env::var_os("CARGO_TARGET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("target"));
-        // wrapper の fork/patch を最小限に保つため、通常は repo 内 submodule を使う。
-        // CLAP_WRAPPER_DIR は SDK 検証や一時的な外部 checkout を試すための escape hatch。
+        // The in-repo submodule is used by default to keep wrapper forks and patches minimal.
+        // CLAP_WRAPPER_DIR is an escape hatch for testing SDK changes or a temporary external checkout.
         let wrapper_dir = env::var_os("CLAP_WRAPPER_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("clap_wrapper_builder"));
-        // Plugin identity は src-plugin/Cargo.toml の [package.metadata.wrac] を SoT にする。
-        // xtask が bundle 名や wrapper 引数を別に持つと、rename 時に build artifact だけ古い名前になる。
+        // Plugin identity is sourced from [package.metadata.wrac] in src-plugin/Cargo.toml.
+        // Maintaining separate bundle names or wrapper arguments in xtask risks stale build artifacts on rename.
         let metadata = PluginMetadata::read(&root.join("src-plugin").join("Cargo.toml"))?;
 
         Ok(Self {
@@ -67,8 +67,8 @@ impl Context {
     }
 
     pub(crate) fn cmake_dir(&self, purpose: &str, profile: BuildProfile) -> PathBuf {
-        // wrapper build directory は短く固定する。
-        // 旧 script の hash path は Windows path limit 回避には有効だが、launch.json や調査時の再現性が落ちる。
+        // Keep the wrapper build directory short and stable.
+        // The old hash-based path helped avoid Windows path length limits but hurt reproducibility in launch.json and investigations.
         self.wrac_dir()
             .join("cmake")
             .join(format!("{purpose}-{}", profile.cmake_suffix()))
