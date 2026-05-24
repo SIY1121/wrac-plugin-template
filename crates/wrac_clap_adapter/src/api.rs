@@ -18,7 +18,7 @@ use clap_sys::ext::note_ports::{
     CLAP_NOTE_DIALECT_MIDI2,
 };
 
-use crate::events::ProcessEvents;
+use crate::events::{ProcessEvents, TransportEvent};
 use crate::process_buffer::{AudioBufferError, AudioProcessBuffer};
 
 #[derive(Debug)]
@@ -69,6 +69,9 @@ pub struct PluginCoreContext {
 /// This is not an API to update the source of truth. The product updates its own store
 /// first, then calls this to report the edit back to the host
 /// (begin → update → end forms one undo unit).
+///
+/// `Send + Sync` allows GUI or control callbacks to share the notifier. It is not
+/// realtime-safe; do not call it from `Processor::process()`.
 pub trait HostParameterEditNotifier: Send + Sync {
     fn begin_edit(&self, parameter_id: u32);
     fn update_edit(&self, parameter_id: u32, value: f64);
@@ -76,6 +79,11 @@ pub trait HostParameterEditNotifier: Send + Sync {
 }
 
 /// Requests the host to resize the GUI client area on behalf of the product (e.g., from the GUI).
+///
+/// This trait is `Send + Sync` because it is stored inside the shared plugin context, not because
+/// every method is meaningful from every thread. Call `request_resize` only from the product's GUI
+/// event path. Do not call it from the audio thread, and do not assume arbitrary background threads
+/// may enter the host's GUI extension safely.
 pub trait HostGuiResizeRequester: Send + Sync {
     fn request_resize(&self, size: GuiSize) -> PluginResult<()>;
 }
@@ -255,6 +263,10 @@ impl ClapWindow {
 /// it impossible to answer one while the other is running. Split each capability into
 /// its own thread-safe store and return it as `Arc<dyn …>` from this trait (see
 /// `src-plugin` for examples).
+///
+/// Returning each capability as a separate `Arc` also keeps safe implementations from
+/// exposing ordinary `PluginCore` fields directly to concurrent host callbacks: any
+/// shared mutable state must cross an explicit thread-safe boundary.
 pub trait PluginCore: Send + Sync + 'static {
     fn activate(&mut self, context: ActivateContext) -> PluginResult<Box<dyn Processor>>;
     fn deactivate(&mut self, processor: Box<dyn Processor>) -> PluginResult<()>;
@@ -303,6 +315,24 @@ pub trait PluginCore: Send + Sync + 'static {
     fn gui(&self) -> Option<Arc<dyn PluginGui>> {
         None
     }
+
+    /// Capability for CLAP render mode changes.
+    ///
+    /// This mirrors the CLAP render extension: the adapter forwards host mode changes,
+    /// and the product decides whether to store that mode for the audio processor.
+    fn render(&self) -> Option<Arc<dyn PluginRender>> {
+        None
+    }
+
+    /// Capability for reporting tail length in frames.
+    fn tail(&self) -> Option<Arc<dyn PluginTail>> {
+        None
+    }
+
+    /// Capability for reporting processing latency in frames.
+    fn latency(&self) -> Option<Arc<dyn PluginLatency>> {
+        None
+    }
 }
 
 /// CLAP audio-ports extension. Returns metadata the host uses to determine routing and
@@ -343,7 +373,8 @@ pub trait PluginNotePorts: Send + Sync + 'static {
 /// CLAP params extension. Design assuming the host reads schema and current values from
 /// any thread. In particular, `parameter_value` / `apply_parameter_value` sit close to
 /// the automation/flush and audio processing boundary, so keep them in a store that does
-/// not share locks the audio thread waits on.
+/// not share locks the audio thread waits on. Do not do GUI dispatch, file IO, or host
+/// callbacks from these methods.
 pub trait PluginParameters: Send + Sync + 'static {
     fn parameter_count(&self) -> u32;
     fn parameter_info(&self, index: u32) -> Option<ParameterInfo>;
@@ -380,6 +411,7 @@ pub trait PluginStateSupport: Send + Sync + 'static {
 
 /// CLAP gui extension. GUI backend thread affinity must be enforced within this trait
 /// (the adapter does not marshal callbacks to the UI thread).
+/// This is not a realtime-safe API and must never be called from `Processor::process()`.
 ///
 /// `get_size`/`can_resize`/`resize_hints` may be re-entered during host layout
 /// computation. Answer from cached size or static hints without entering heavy mutations.
@@ -404,12 +436,41 @@ pub trait PluginGui: Send + Sync + 'static {
     fn hide(&self) -> PluginResult<()>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    Realtime,
+    Offline,
+}
+
+/// CLAP render extension. The host calls this outside `process()` to announce whether
+/// upcoming processing is realtime or offline.
+pub trait PluginRender: Send + Sync + 'static {
+    fn has_hard_realtime_requirement(&self) -> bool {
+        false
+    }
+
+    fn set_render_mode(&self, mode: RenderMode) -> PluginResult<()>;
+}
+
+/// CLAP tail extension. The returned value is a frame count, matching CLAP directly.
+pub trait PluginTail: Send + Sync + 'static {
+    fn tail_frames(&self) -> u32;
+}
+
+/// CLAP latency extension. The returned value is a frame count, matching CLAP directly.
+pub trait PluginLatency: Send + Sync + 'static {
+    fn latency_frames(&self) -> u32;
+}
+
 /// Processing object that runs on the audio thread.
 ///
 /// Kept separate from `PluginCore` to decouple the audio callback from the core's write
 /// lock and from GUI/project state. State passed in must be either an immutable snapshot
 /// copied at activate time, or atomic/lock-free shared state the audio thread never
 /// waits on (even when passing `Arc<Mutex<_>>`, design it so process() never locks).
+///
+/// `Send` lets the adapter move the processor to the audio owner. `Sync` is intentionally
+/// not required because the adapter calls it through exclusive `&mut self` access.
 pub trait Processor: Send {
     fn reset(&mut self) {}
     fn process(&mut self, context: ProcessContext<'_>) -> PluginResult<ProcessStatus>;
@@ -419,6 +480,7 @@ pub struct ProcessContext<'a> {
     pub frames_count: u32,
     pub audio: AudioProcessBuffer<'a>,
     pub events: ProcessEvents<'a>,
+    pub transport: Option<TransportEvent>,
 }
 
 #[derive(Debug, Clone, Copy)]
