@@ -593,7 +593,6 @@ impl WxpGuiResizeHandle {
         let logical_size = self.layout.clamp_logical_size(requested, scale);
         let gui_size = DpiConverter::new(scale).logical_size_to_gui(logical_size);
 
-
         let previous_revision = self.layout.accepted_size_revision();
         let resize_result = host_gui_resize_requester.request_resize(gui_size);
         let current_revision = self.layout.accepted_size_revision();
