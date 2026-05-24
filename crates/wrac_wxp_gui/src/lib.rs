@@ -10,6 +10,6 @@ mod runtime;
 mod window;
 
 pub use controller::{GuiSizeLimits, WxpGuiController, WxpGuiResizeHandle};
-pub use dpi::{DpiConverter, gui_size_to_logical, logical_size_to_gui};
+pub use dpi::DpiConverter;
 pub use runtime::{WxpGuiFactory, WxpGuiRuntime};
 pub use window::ParentWindowHandle;

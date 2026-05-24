@@ -523,15 +523,11 @@ impl HostGuiLayout {
         clamp_size_with_limits(size, self.limits)
     }
 
-    fn clamp_logical_size(&self, size: LogicalSize<f64>) -> LogicalSize<f64> {
-        LogicalSize::new(
-            size.width
-                .round()
-                .clamp(self.limits.min.width as f64, self.limits.max.width as f64),
-            size.height
-                .round()
-                .clamp(self.limits.min.height as f64, self.limits.max.height as f64),
-        )
+    fn clamp_logical_size(&self, size: LogicalSize<f64>, scale: f64) -> LogicalSize<f64> {
+        let dpi = DpiConverter::new(scale);
+        let physical = dpi.logical_size_to_gui(size);
+        let clamped = clamp_size_with_limits(physical, self.limits);
+        dpi.gui_size_to_logical(clamped)
     }
 
     fn store_accepted_size(&self, size: GuiSize) {
@@ -569,12 +565,10 @@ impl WxpGuiResizeHandle {
         requested: LogicalSize<f64>,
         web_view: &WebViewDispatch,
         host_gui_resize_requester: &dyn HostGuiResizeRequester,
-    ) -> PluginResult<GuiSize> {
-        let logical_size = self.layout.clamp_logical_size(requested);
-        let gui_size = GuiSize {
-            width: logical_size.width as u32,
-            height: logical_size.height as u32,
-        };
+    ) -> PluginResult<LogicalSize<f64>> {
+        let scale = *self.scale.lock();
+        let logical_size = self.layout.clamp_logical_size(requested, scale);
+        let gui_size = DpiConverter::new(scale).logical_size_to_gui(logical_size);
 
         let previous_revision = self.layout.accepted_size_revision();
         let resize_result = host_gui_resize_requester.request_resize(gui_size);
@@ -584,8 +578,9 @@ impl WxpGuiResizeHandle {
         // `set_size()` re-entrantly, and then returns false to CLAP. Treat that re-entrant
         // `set_size()` as the ground truth. Optimistically resizing the WebView here would
         // race geometry with the host and cause visual jitter during grip dragging.
+        let dpi = DpiConverter::new(scale);
         if current_revision != previous_revision {
-            return Ok(self.layout.accepted_size());
+            return Ok(dpi.gui_size_to_logical(self.layout.accepted_size()));
         }
 
         match resize_result {
@@ -594,12 +589,11 @@ impl WxpGuiResizeHandle {
                 // update the WebView directly without waiting for an async callback.
                 // Pass `WebViewDispatch` rather than the native owner so the command handler
                 // can resize without extending the lifetime of a closing editor.
-                let scale = *self.scale.lock();
                 web_view
-                    .post_set_bounds(DpiConverter::new(scale).create_webview_bounds(logical_size))
+                    .post_set_bounds(dpi.create_webview_bounds(logical_size))
                     .map_err(|_| PluginError::Message("failed to resize webview"))?;
                 self.layout.store_accepted_size(gui_size);
-                Ok(gui_size)
+                Ok(logical_size)
             }
             Err(error) => {
                 // A genuine rejection is distinct from the AUv2 re-entry case above. Rather
