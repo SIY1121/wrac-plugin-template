@@ -11,20 +11,24 @@ build = "build.rs"
 # WRAC metadata is the single source of truth for descriptors, GUI metadata,
 # bundle names, wrapper arguments, AUv2 registration, WebView data dirs, and logs.
 [package.metadata.wrac]
+# User-visible vendor name shown by hosts and the template GUI.
+company_name = "Your Company"
+# AUv2 manufacturer code. Use the same 4-byte ASCII code across your plugin catalog.
+auv2_manufacturer_code = "YrCo"
+# User-visible bundle name.
+bundle_name = "WRAC Gain"
+# User-visible standalone app name.
+standalone_name = "WRAC Gain Standalone"
+
+[[package.metadata.wrac.plugins]]
 # Reverse-DNS identifier. Use your own domain or another namespace you control.
 plugin_id = "com.your-company.wrac-gain"
 # User-visible plugin name shown by hosts and the template GUI.
 plugin_name = "WRAC Gain"
-# User-visible vendor name shown by hosts and the template GUI.
-company_name = "Your Company"
 # AUv2 component type. Audio effects usually use "aufx"; instruments usually use "aumu".
 auv2_type = "aufx"
 # AUv2 subtype. Pick a unique 4-byte ASCII code for each plugin from the same vendor.
 auv2_subtype = "WtGn"
-# AUv2 manufacturer code. Use the same 4-byte ASCII code across your plugin catalog.
-auv2_manufacturer_code = "YrCo"
-# User-visible standalone app name.
-standalone_name = "WRAC Gain Standalone"
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
@@ -41,6 +45,7 @@ serde_json = "1.0"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 run_loop_timer = { workspace = true }
 wrac_clap_adapter = { workspace = true }
+wrac_log = { workspace = true }
 wrac_wxp_gui = { workspace = true }
 wxp = { workspace = true }
 

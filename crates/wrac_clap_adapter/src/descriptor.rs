@@ -1,8 +1,6 @@
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
-use std::sync::OnceLock;
 
-use clap_sys::factory::plugin_factory::clap_plugin_factory;
 use clap_sys::plugin::clap_plugin_descriptor;
 use clap_sys::plugin_features::{
     CLAP_PLUGIN_FEATURE_AMBISONIC, CLAP_PLUGIN_FEATURE_ANALYZER, CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
@@ -21,10 +19,6 @@ use clap_sys::plugin_features::{
     CLAP_PLUGIN_FEATURE_TRANSIENT_SHAPER, CLAP_PLUGIN_FEATURE_TREMOLO, CLAP_PLUGIN_FEATURE_UTILITY,
 };
 use clap_sys::version::CLAP_VERSION;
-
-use crate::{PluginCore, PluginCoreContext};
-
-pub(crate) type CreatePluginCore = fn(PluginCoreContext) -> Box<dyn PluginCore>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PluginDescriptor {
@@ -137,121 +131,11 @@ pub struct Auv2Descriptor {
     pub plugin_subtype: [u8; 4],
 }
 
-/// Descriptor and factory function fixed for the plugin binary.
-///
-/// The factory callback may be called at any time, so it is stored statically. Being
-/// immutable allows it to be passed to the C ABI without relying on a global mutable
-/// registry or pointer leaks.
-pub struct PluginRegistration {
-    pub(crate) descriptor: PluginDescriptor,
-    pub(crate) create: CreatePluginCore,
-    storage: OnceLock<PluginRegistrationStorage>,
-}
-
-// Safety: `descriptor` and `create` are immutable data in the static registration;
-// mutable state is synchronized by `OnceLock`. Factory queries from multiple threads
-// via the C ABI return only shared references.
-unsafe impl Sync for PluginRegistration {}
-unsafe impl Send for PluginRegistration {}
-
-impl PluginRegistration {
-    pub const fn new(descriptor: PluginDescriptor, create: CreatePluginCore) -> Self {
-        Self {
-            descriptor,
-            create,
-            storage: OnceLock::new(),
-        }
-    }
-
-    pub(crate) fn storage(&'static self) -> &'static PluginRegistrationStorage {
-        self.storage
-            .get_or_init(|| PluginRegistrationStorage::new(self))
-    }
-}
-
-pub(crate) struct PluginRegistrationStorage {
-    pub clap_factory: ClapFactoryState,
-    pub auv2_factory: Auv2FactoryState,
-    pub descriptor: ClapDescriptorStorage,
-}
-
-// Safety: after creation the storage only reads out factory/descriptor pointers.
-// Internal pointers point to buffers owned by this same storage, and `OnceLock`
-// prevents initialization races.
-unsafe impl Sync for PluginRegistrationStorage {}
-unsafe impl Send for PluginRegistrationStorage {}
-
-impl PluginRegistrationStorage {
-    fn new(registration: &'static PluginRegistration) -> Self {
-        let descriptor = ClapDescriptorStorage::new(registration.descriptor);
-        Self {
-            clap_factory: ClapFactoryState {
-                factory: clap_plugin_factory {
-                    get_plugin_count: Some(crate::abi::factory_get_plugin_count),
-                    get_plugin_descriptor: Some(crate::abi::factory_get_plugin_descriptor),
-                    create_plugin: Some(crate::abi::factory_create_plugin),
-                },
-                registration,
-            },
-            auv2_factory: Auv2FactoryState {
-                factory: ClapPluginFactoryAsAuv2 {
-                    manufacturer_code: descriptor.auv2_manufacturer_code_ptr(),
-                    manufacturer_name: descriptor.auv2_manufacturer_name_ptr(),
-                    get_auv2_info: Some(crate::abi::auv2_get_info),
-                },
-                registration,
-            },
-            descriptor,
-        }
-    }
-}
-
-// CLAP factory callbacks receive only a factory pointer, so the C ABI struct is placed
-// as the first field and cast back to the state inside the callback.
-#[repr(C)]
-pub(crate) struct ClapFactoryState {
-    pub factory: clap_plugin_factory,
-    pub registration: &'static PluginRegistration,
-}
-
-unsafe impl Sync for ClapFactoryState {}
-unsafe impl Send for ClapFactoryState {}
-
-#[repr(C)]
-pub(crate) struct Auv2FactoryState {
-    pub factory: ClapPluginFactoryAsAuv2,
-    pub registration: &'static PluginRegistration,
-}
-
-unsafe impl Sync for Auv2FactoryState {}
-unsafe impl Send for Auv2FactoryState {}
-
-#[repr(C)]
-pub(crate) struct ClapPluginInfoAsAuv2 {
-    pub au_type: [c_char; 5],
-    pub au_subt: [c_char; 5],
-}
-
-#[repr(C)]
-pub(crate) struct ClapPluginFactoryAsAuv2 {
-    pub manufacturer_code: *const c_char,
-    pub manufacturer_name: *const c_char,
-    pub get_auv2_info: Option<
-        unsafe extern "C" fn(
-            factory: *const ClapPluginFactoryAsAuv2,
-            index: u32,
-            info: *mut ClapPluginInfoAsAuv2,
-        ) -> bool,
-    >,
-}
-
-unsafe impl Sync for ClapPluginFactoryAsAuv2 {}
-unsafe impl Send for ClapPluginFactoryAsAuv2 {}
-
 // `clap_plugin_descriptor` holds only C string pointers, so the owners of the CString
 // and feature pointer arrays are placed in the same storage to keep their lifetimes
 // aligned with the descriptor pointer.
 pub(crate) struct ClapDescriptorStorage {
+    descriptor: PluginDescriptor,
     _id: CString,
     _name: CString,
     _vendor: CString,
@@ -273,7 +157,7 @@ unsafe impl Sync for ClapDescriptorStorage {}
 unsafe impl Send for ClapDescriptorStorage {}
 
 impl ClapDescriptorStorage {
-    fn new(descriptor: PluginDescriptor) -> Self {
+    pub(crate) fn new(descriptor: PluginDescriptor) -> Self {
         let id = cstring(descriptor.id);
         let name = cstring(descriptor.name);
         let vendor = cstring(descriptor.vendor);
@@ -309,6 +193,7 @@ impl ClapDescriptorStorage {
         };
 
         Self {
+            descriptor,
             _id: id,
             _name: name,
             _vendor: vendor,
@@ -328,45 +213,23 @@ impl ClapDescriptorStorage {
         &self.clap_descriptor
     }
 
-    fn auv2_manufacturer_code_ptr(&self) -> *const c_char {
+    pub(crate) fn auv2_manufacturer_code_ptr(&self) -> Option<*const c_char> {
         self.auv2_manufacturer_code
             .as_ref()
-            .map_or(ptr::null(), |value| value.as_ptr())
+            .map(|value| value.as_ptr())
     }
 
-    fn auv2_manufacturer_name_ptr(&self) -> *const c_char {
+    pub(crate) fn auv2_manufacturer_name_ptr(&self) -> Option<*const c_char> {
         self.auv2_manufacturer_name
             .as_ref()
-            .map_or(ptr::null(), |value| value.as_ptr())
+            .map(|value| value.as_ptr())
+    }
+
+    pub(crate) fn descriptor(&self) -> PluginDescriptor {
+        self.descriptor
     }
 }
 
 fn cstring(value: &'static str) -> CString {
     CString::new(value).expect("plugin descriptor strings must not contain NUL bytes")
-}
-
-pub(crate) fn clap_factory_state(
-    factory: *const clap_plugin_factory,
-) -> Option<&'static ClapFactoryState> {
-    if factory.is_null() {
-        return None;
-    }
-    Some(unsafe { &*(factory as *const ClapFactoryState) })
-}
-
-pub(crate) fn auv2_factory_state(
-    factory: *const ClapPluginFactoryAsAuv2,
-) -> Option<&'static Auv2FactoryState> {
-    if factory.is_null() {
-        return None;
-    }
-    Some(unsafe { &*(factory as *const Auv2FactoryState) })
-}
-
-pub(crate) fn factory_ptr(storage: &'static PluginRegistrationStorage) -> *const c_void {
-    &storage.clap_factory.factory as *const clap_plugin_factory as *const c_void
-}
-
-pub(crate) fn auv2_factory_ptr(storage: &'static PluginRegistrationStorage) -> *const c_void {
-    &storage.auv2_factory.factory as *const ClapPluginFactoryAsAuv2 as *const c_void
 }

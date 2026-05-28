@@ -29,16 +29,27 @@ fn main() {
     // template rename could leave some artifacts with the old name, so pass them to Rust
     // as compile-time env vars.
     let metadata = read_wrac_metadata(&manifest_path).expect("failed to read WRAC metadata");
-    println!("cargo:rustc-env=WRAC_PLUGIN_ID={}", metadata.plugin_id);
-    println!("cargo:rustc-env=WRAC_PLUGIN_NAME={}", metadata.plugin_name);
+    for (index, plugin) in metadata.plugins.iter().enumerate() {
+        println!(
+            "cargo:rustc-env=WRAC_PLUGIN_{index}_ID={}",
+            plugin.plugin_id
+        );
+        println!(
+            "cargo:rustc-env=WRAC_PLUGIN_{index}_NAME={}",
+            plugin.plugin_name
+        );
+        println!(
+            "cargo:rustc-env=WRAC_PLUGIN_{index}_AUV2_TYPE={}",
+            plugin.auv2_type
+        );
+        println!(
+            "cargo:rustc-env=WRAC_PLUGIN_{index}_AUV2_SUBTYPE={}",
+            plugin.auv2_subtype
+        );
+    }
     println!(
         "cargo:rustc-env=WRAC_COMPANY_NAME={}",
         metadata.company_name
-    );
-    println!("cargo:rustc-env=WRAC_AUV2_TYPE={}", metadata.auv2_type);
-    println!(
-        "cargo:rustc-env=WRAC_AUV2_SUBTYPE={}",
-        metadata.auv2_subtype
     );
     println!(
         "cargo:rustc-env=WRAC_AUV2_MANUFACTURER_CODE={}",
@@ -70,39 +81,38 @@ fn main() {
 }
 
 struct WracMetadata {
+    company_name: String,
+    auv2_manufacturer_code: String,
+    plugins: Vec<WracPluginMetadata>,
+}
+
+struct WracPluginMetadata {
     plugin_id: String,
     plugin_name: String,
-    company_name: String,
     auv2_type: String,
     auv2_subtype: String,
-    auv2_manufacturer_code: String,
 }
 
 fn read_wrac_metadata(manifest_path: &Path) -> io::Result<WracMetadata> {
     let manifest = fs::read_to_string(manifest_path)?;
-    let plugin_id = read_toml_string(&manifest, "package.metadata.wrac", "plugin_id")
-        .ok_or_else(|| missing_metadata("plugin_id"))?;
-    let plugin_name = read_toml_string(&manifest, "package.metadata.wrac", "plugin_name")
-        .ok_or_else(|| missing_metadata("plugin_name"))?;
     let company_name = read_toml_string(&manifest, "package.metadata.wrac", "company_name")
         .ok_or_else(|| missing_metadata("company_name"))?;
-    let auv2_type = read_toml_string(&manifest, "package.metadata.wrac", "auv2_type")
-        .ok_or_else(|| missing_metadata("auv2_type"))?;
-    let auv2_subtype = read_toml_string(&manifest, "package.metadata.wrac", "auv2_subtype")
-        .ok_or_else(|| missing_metadata("auv2_subtype"))?;
     let auv2_manufacturer_code =
         read_toml_string(&manifest, "package.metadata.wrac", "auv2_manufacturer_code")
             .ok_or_else(|| missing_metadata("auv2_manufacturer_code"))?;
-    validate_four_ascii("auv2_type", &auv2_type)?;
-    validate_four_ascii("auv2_subtype", &auv2_subtype)?;
     validate_four_ascii("auv2_manufacturer_code", &auv2_manufacturer_code)?;
+    let plugins = read_plugin_metadata(&manifest)?;
+    if plugins.is_empty() {
+        return Err(missing_metadata("plugins"));
+    }
+    for plugin in &plugins {
+        validate_four_ascii("auv2_type", &plugin.auv2_type)?;
+        validate_four_ascii("auv2_subtype", &plugin.auv2_subtype)?;
+    }
     Ok(WracMetadata {
-        plugin_id,
-        plugin_name,
         company_name,
-        auv2_type,
-        auv2_subtype,
         auv2_manufacturer_code,
+        plugins,
     })
 }
 
@@ -133,6 +143,63 @@ fn read_toml_string(manifest: &str, section: &str, key: &str) -> Option<String> 
         return parse_toml_basic_string(value.trim());
     }
     None
+}
+
+fn read_plugin_metadata(manifest: &str) -> io::Result<Vec<WracPluginMetadata>> {
+    let mut plugins = Vec::new();
+    let mut current: Option<WracPluginMetadata> = None;
+    let mut in_plugins = false;
+
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            if let Some(plugin) = current.take() {
+                plugins.push(plugin);
+            }
+            in_plugins = line == "[[package.metadata.wrac.plugins]]";
+            if in_plugins {
+                current = Some(WracPluginMetadata {
+                    plugin_id: String::new(),
+                    plugin_name: String::new(),
+                    auv2_type: String::new(),
+                    auv2_subtype: String::new(),
+                });
+            }
+            continue;
+        }
+        if !in_plugins {
+            continue;
+        }
+        let Some((line_key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Some(value) = parse_toml_basic_string(value.trim()) else {
+            continue;
+        };
+        let plugin = current
+            .as_mut()
+            .expect("plugin table must create current metadata");
+        match line_key.trim() {
+            "plugin_id" => plugin.plugin_id = value,
+            "plugin_name" => plugin.plugin_name = value,
+            "auv2_type" => plugin.auv2_type = value,
+            "auv2_subtype" => plugin.auv2_subtype = value,
+            _ => {}
+        }
+    }
+    if let Some(plugin) = current {
+        plugins.push(plugin);
+    }
+    for plugin in &plugins {
+        if plugin.plugin_id.is_empty()
+            || plugin.plugin_name.is_empty()
+            || plugin.auv2_type.is_empty()
+            || plugin.auv2_subtype.is_empty()
+        {
+            return Err(missing_metadata("plugins.*"));
+        }
+    }
+    Ok(plugins)
 }
 
 fn parse_toml_basic_string(value: &str) -> Option<String> {

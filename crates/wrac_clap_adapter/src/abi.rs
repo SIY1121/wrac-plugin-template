@@ -1,6 +1,6 @@
 //! Module that binds the CLAP ABI to `PluginCore` instances.
 //!
-//! The public API is surfaced through re-exports in `lib.rs` and `export_clap_plugin!`.
+//! The public API is surfaced through re-exports in `lib.rs` and `export_clap_entry!`.
 //! This module is responsible only for C ABI callbacks and owning the adapter state.
 
 use std::cell::UnsafeCell;
@@ -44,9 +44,13 @@ mod tail_extension;
 
 use self::audio_buffers::audio_buffers;
 use self::ffi::{ffi_bool, ffi_ptr, ffi_status, ffi_unit, four_char_code};
-use crate::descriptor::{
-    Auv2FactoryState, ClapPluginFactoryAsAuv2, ClapPluginInfoAsAuv2, PluginRegistration,
-    auv2_factory_ptr, auv2_factory_state, clap_factory_state, factory_ptr,
+use crate::entry::{
+    EntryContext, EntryRegistration, decrement_entry_init_count, entry_init_count,
+    increment_entry_init_count, reset_entry_init_count,
+};
+use crate::factory::{
+    Auv2FactoryState, ClapPluginFactoryAsAuv2, ClapPluginInfoAsAuv2, auv2_factory_ptr,
+    auv2_factory_state, clap_factory_state, factory_ptr,
 };
 use crate::host_gui::HostGuiResizeRequest;
 use crate::host_state::HostStateDirtyNotification;
@@ -118,7 +122,12 @@ unsafe impl Send for PluginInstance {}
 unsafe impl Sync for PluginInstance {}
 
 impl PluginInstance {
-    fn new(registration: &'static PluginRegistration, host: *const clap_host) -> Box<Self> {
+    fn new(
+        registration: &'static EntryRegistration,
+        descriptor_index: usize,
+        plugin_id: &CStr,
+        host: *const clap_host,
+    ) -> Option<Box<Self>> {
         let parameter_edits = Arc::new(ParameterEditQueue::new(host));
         // Pass as a safe proxy so product GUI code can hold it without knowing about
         // host pointers or CLAP event lifetimes.
@@ -127,7 +136,10 @@ impl PluginInstance {
             host_state_dirty_notifier: Arc::new(HostStateDirtyNotification::new(host)),
             host_gui_resize_requester: Arc::new(HostGuiResizeRequest::new(host)),
         };
-        let core = (registration.create)(context);
+        let core = registration
+            .entry
+            .plugin_factory()?
+            .create_plugin(plugin_id, context)?;
         // Freeze capabilities here, before callbacks begin. Waiting on the core lock
         // inside get_extension would make us dependent on host re-entry order. The Arc
         // is just an entry point; the source of truth remains in the plugin's store.
@@ -153,9 +165,9 @@ impl PluginInstance {
         };
         let storage = registration.storage();
 
-        Box::new(Self {
+        Some(Box::new(Self {
             plugin: clap_plugin {
-                desc: storage.descriptor.clap_descriptor(),
+                desc: storage.descriptors.get(descriptor_index)?.clap_descriptor(),
                 plugin_data: ptr::null_mut(),
                 init: Some(plugin_init),
                 destroy: Some(plugin_destroy),
@@ -184,7 +196,7 @@ impl PluginInstance {
             processor: UnsafeCell::new(None),
             processor_busy: AtomicBool::new(false),
             lifecycle_busy: AtomicBool::new(false),
-        })
+        }))
     }
 
     pub(crate) unsafe fn from_plugin<'a>(plugin: *const clap_plugin) -> Option<&'a Self> {
@@ -301,24 +313,52 @@ impl Drop for LifecycleGuard<'_> {
 /// `plugin_path` must be a valid CLAP string pointer when provided by the host.
 /// The registration must be the static registration generated for this binary.
 pub unsafe extern "C" fn entry_init(
-    _registration: &'static PluginRegistration,
-    _plugin_path: *const c_char,
+    registration: &'static EntryRegistration,
+    plugin_path: *const c_char,
 ) -> bool {
-    true
+    ffi_bool(|| {
+        let count = increment_entry_init_count(registration);
+        if count > 1 {
+            return true;
+        }
+
+        let plugin_path = if plugin_path.is_null() {
+            None
+        } else {
+            Some(unsafe { CStr::from_ptr(plugin_path) })
+        };
+        if let Err(error) = registration.entry.init(EntryContext { plugin_path }) {
+            log::warn!("entry.init: product init failed: {error}");
+            reset_entry_init_count(registration);
+            return false;
+        }
+        true
+    })
 }
 
 /// # Safety
 ///
 /// The registration must be the same static registration previously passed to
 /// `entry_init` for this binary.
-pub unsafe extern "C" fn entry_deinit(_registration: &'static PluginRegistration) {}
+pub unsafe extern "C" fn entry_deinit(registration: &'static EntryRegistration) {
+    ffi_unit(|| {
+        if entry_init_count(registration) == 0 {
+            log::warn!("entry.deinit: called while entry is not initialized");
+            return;
+        }
+        let count = decrement_entry_init_count(registration);
+        if count == 0 {
+            registration.entry.deinit();
+        }
+    })
+}
 
 /// # Safety
 ///
 /// `factory_id` must be null or point to a valid NUL-terminated CLAP factory id.
 /// The returned pointer is owned by the static plugin registration storage.
 pub unsafe extern "C" fn entry_get_factory(
-    registration: &'static PluginRegistration,
+    registration: &'static EntryRegistration,
     factory_id: *const c_char,
 ) -> *const c_void {
     ffi_ptr(|| {
@@ -330,7 +370,10 @@ pub unsafe extern "C" fn entry_get_factory(
         if factory_id == CLAP_PLUGIN_FACTORY_ID {
             factory_ptr(storage)
         } else if factory_id == CLAP_PLUGIN_FACTORY_INFO_AUV2
-            && registration.descriptor.auv2.is_some()
+            && storage
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.descriptor().auv2.is_some())
         {
             auv2_factory_ptr(storage)
         } else {
@@ -345,7 +388,7 @@ pub(crate) unsafe extern "C" fn auv2_get_info(
     info: *mut ClapPluginInfoAsAuv2,
 ) -> bool {
     ffi_bool(|| {
-        if index != 0 || info.is_null() {
+        if info.is_null() {
             log::warn!(
                 "auv2.get_info: invalid arguments index={index} info_is_null={}",
                 info.is_null()
@@ -357,8 +400,12 @@ pub(crate) unsafe extern "C" fn auv2_get_info(
             log::warn!("auv2.get_info: invalid factory pointer");
             return false;
         };
-        let Some(auv2) = registration.descriptor.auv2 else {
-            log::warn!("auv2.get_info: registration has no AUv2 descriptor");
+        let Some(descriptor) = registration.storage().descriptors.get(index as usize) else {
+            log::warn!("auv2.get_info: descriptor not found index={index}");
+            return false;
+        };
+        let Some(auv2) = descriptor.descriptor().auv2 else {
+            log::warn!("auv2.get_info: descriptor has no AUv2 info index={index}");
             return false;
         };
 
@@ -371,25 +418,28 @@ pub(crate) unsafe extern "C" fn auv2_get_info(
 }
 
 pub(crate) unsafe extern "C" fn factory_get_plugin_count(
-    _factory: *const clap_plugin_factory,
+    factory: *const clap_plugin_factory,
 ) -> u32 {
-    1
+    let Some(state) = clap_factory_state(factory) else {
+        log::warn!("factory.get_plugin_count: invalid factory pointer");
+        return 0;
+    };
+    state.registration.storage().descriptors.len() as u32
 }
 
 pub(crate) unsafe extern "C" fn factory_get_plugin_descriptor(
     factory: *const clap_plugin_factory,
     index: u32,
 ) -> *const clap_plugin_descriptor {
-    if index != 0 {
-        log::warn!("factory.get_plugin_descriptor: invalid index={index}");
-        return ptr::null();
-    }
-
     let Some(state) = clap_factory_state(factory) else {
         log::warn!("factory.get_plugin_descriptor: invalid factory pointer");
         return ptr::null();
     };
-    state.registration.storage().descriptor.clap_descriptor()
+    let Some(descriptor) = state.registration.storage().descriptors.get(index as usize) else {
+        log::warn!("factory.get_plugin_descriptor: invalid index={index}");
+        return ptr::null();
+    };
+    descriptor.clap_descriptor()
 }
 
 pub(crate) unsafe extern "C" fn factory_create_plugin(
@@ -416,13 +466,24 @@ pub(crate) unsafe extern "C" fn factory_create_plugin(
             return ptr::null();
         };
         let registration = factory_state.registration;
-        if unsafe { CStr::from_ptr(plugin_id) }.to_bytes() != registration.descriptor.id.as_bytes()
-        {
+        let plugin_id = unsafe { CStr::from_ptr(plugin_id) };
+        let storage = registration.storage();
+        let Some((descriptor_index, _descriptor)) = storage
+            .descriptors
+            .iter()
+            .enumerate()
+            .find(|(_, descriptor)| descriptor.descriptor().id.as_bytes() == plugin_id.to_bytes())
+        else {
             log::warn!("factory.create_plugin: requested unknown plugin id");
             return ptr::null();
-        }
+        };
 
-        let mut instance = PluginInstance::new(registration, host);
+        let Some(mut instance) =
+            PluginInstance::new(registration, descriptor_index, plugin_id, host)
+        else {
+            log::warn!("factory.create_plugin: product factory returned no plugin core");
+            return ptr::null();
+        };
         let instance_ptr = (&mut *instance) as *mut PluginInstance;
         instance.plugin.plugin_data = instance_ptr.cast();
         let plugin_ptr = &instance.plugin as *const clap_plugin;

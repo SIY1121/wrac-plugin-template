@@ -1,14 +1,16 @@
 //! Adapter crate that connects the CLAP ABI to the plugin core.
 //!
 //! Product crates only need to implement the safe traits in [`api`] and declare
-//! the CLAP entry with [`export_clap_plugin!`]. `clap-sys`, raw pointers, event
+//! the CLAP entry with [`export_clap_entry!`]. `clap-sys`, raw pointers, event
 //! conversion, and host callbacks are all encapsulated inside the adapter.
 //! See `api.rs` for the trait contracts.
 
 mod abi;
 mod api;
 mod descriptor;
+mod entry;
 mod events;
+mod factory;
 mod host_gui;
 mod host_state;
 mod params;
@@ -24,6 +26,7 @@ pub use api::{
     ProcessStatus, Processor, RenderMode,
 };
 pub use descriptor::{Auv2Descriptor, PluginDescriptor, PluginFeature};
+pub use entry::{EntryContext, PluginEntry, PluginFactory};
 pub use events::{
     InputEvent, InputEvents, Midi2Event, MidiEvent, MidiSysexEvent, NoteEvent, NoteExpressionEvent,
     OutputEvent, OutputEvents, ParameterGestureEvent, ParameterModEvent, ProcessEvents,
@@ -41,35 +44,35 @@ pub mod __private {
     pub use std::ffi::{c_char, c_void};
 
     pub use crate::abi::{entry_deinit, entry_get_factory, entry_init};
-    pub use crate::descriptor::PluginRegistration;
+    pub use crate::entry::EntryRegistration;
 }
 
 #[macro_export]
-macro_rules! export_clap_plugin {
-    (descriptor: $descriptor:expr, create: $create:path $(,)?) => {
+macro_rules! export_clap_entry {
+    (entry: $entry:expr $(,)?) => {
         #[allow(non_snake_case)]
         mod __wrac_clap_export {
             // The CLAP entry symbol must appear exactly once per binary, so this macro
             // expands in the product crate rather than in the adapter. The adapter
-            // stays reusable while the static lifetimes of descriptor and factory are
-            // confined to the binary.
-            static WRAC_CLAP_PLUGIN_REGISTRATION: $crate::__private::PluginRegistration =
-                $crate::__private::PluginRegistration::new($descriptor, $create);
+            // stays reusable while entry and factory storage lifetimes are confined to
+            // the binary.
+            static WRAC_CLAP_ENTRY_REGISTRATION: $crate::__private::EntryRegistration =
+                $crate::__private::EntryRegistration::new($entry);
 
             unsafe extern "C" fn wrac_clap_entry_init(
                 plugin_path: *const $crate::__private::c_char,
             ) -> bool {
-                $crate::__private::entry_init(&WRAC_CLAP_PLUGIN_REGISTRATION, plugin_path)
+                $crate::__private::entry_init(&WRAC_CLAP_ENTRY_REGISTRATION, plugin_path)
             }
 
             unsafe extern "C" fn wrac_clap_entry_deinit() {
-                $crate::__private::entry_deinit(&WRAC_CLAP_PLUGIN_REGISTRATION)
+                $crate::__private::entry_deinit(&WRAC_CLAP_ENTRY_REGISTRATION)
             }
 
             unsafe extern "C" fn wrac_clap_entry_get_factory(
                 factory_id: *const $crate::__private::c_char,
             ) -> *const $crate::__private::c_void {
-                $crate::__private::entry_get_factory(&WRAC_CLAP_PLUGIN_REGISTRATION, factory_id)
+                $crate::__private::entry_get_factory(&WRAC_CLAP_ENTRY_REGISTRATION, factory_id)
             }
 
             #[allow(unreachable_pub)]

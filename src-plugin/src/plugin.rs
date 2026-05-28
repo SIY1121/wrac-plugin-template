@@ -10,6 +10,7 @@
 //! Format differences between CLAP, VST3, and AU are absorbed by `wrac_clap_adapter`,
 //! so this module focuses solely on "which capabilities this plugin offers."
 
+use std::ffi::CStr;
 use std::sync::Arc;
 
 mod audio_ports;
@@ -27,8 +28,8 @@ use parameters::{WracGainParameters, bypass_parameter_info};
 use state_support::WracGainStateSupport;
 use wrac_clap_adapter::{
     ActivateContext, Auv2Descriptor, PluginAudioPorts, PluginConfigurableAudioPorts, PluginCore,
-    PluginCoreContext, PluginDescriptor, PluginFeature, PluginGui, PluginParameters, PluginResult,
-    PluginStateSupport, Processor,
+    PluginCoreContext, PluginDescriptor, PluginEntry, PluginFactory, PluginFeature, PluginGui,
+    PluginParameters, PluginResult, PluginStateSupport, Processor,
 };
 use wrac_wxp_gui::WxpGuiController;
 
@@ -40,11 +41,11 @@ use crate::state::{ProjectStateStore, SharedState};
 // src-plugin/Cargo.toml. The GUI, xtask, and wrapper build all read the same metadata,
 // so env! macros are used here instead of hard-coded strings to prevent mismatches
 // (mismatched bundle names or About-dialog text) when renaming the template.
-pub(crate) const PLUGIN_ID: &str = env!("WRAC_PLUGIN_ID");
-pub(crate) const PLUGIN_NAME: &str = env!("WRAC_PLUGIN_NAME");
+pub(crate) const PLUGIN_ID: &str = env!("WRAC_PLUGIN_0_ID");
+pub(crate) const PLUGIN_NAME: &str = env!("WRAC_PLUGIN_0_NAME");
 pub(crate) const COMPANY_NAME: &str = env!("WRAC_COMPANY_NAME");
-const AUV2_TYPE: [u8; 4] = four_char_code(env!("WRAC_AUV2_TYPE"));
-const AUV2_SUBTYPE: [u8; 4] = four_char_code(env!("WRAC_AUV2_SUBTYPE"));
+const AUV2_TYPE: [u8; 4] = four_char_code(env!("WRAC_PLUGIN_0_AUV2_TYPE"));
+const AUV2_SUBTYPE: [u8; 4] = four_char_code(env!("WRAC_PLUGIN_0_AUV2_SUBTYPE"));
 const AUV2_MANUFACTURER_CODE: [u8; 4] = four_char_code(env!("WRAC_AUV2_MANUFACTURER_CODE"));
 
 // Plugin self-description sent to the host. The adapter converts this into CLAP / AUv2 descriptors.
@@ -71,6 +72,38 @@ pub(crate) const PLUGIN_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         plugin_subtype: AUV2_SUBTYPE,
     }),
 };
+
+pub(crate) static PLUGIN_ENTRY: WracGainEntry = WracGainEntry;
+
+pub(crate) struct WracGainEntry;
+
+impl PluginEntry for WracGainEntry {
+    fn plugin_factory(&self) -> Option<&dyn PluginFactory> {
+        Some(&WRAC_GAIN_FACTORY)
+    }
+}
+
+static WRAC_GAIN_FACTORY: WracGainFactory = WracGainFactory;
+
+struct WracGainFactory;
+
+impl PluginFactory for WracGainFactory {
+    fn plugin_count(&self) -> u32 {
+        1
+    }
+
+    fn plugin_descriptor(&self, index: u32) -> Option<PluginDescriptor> {
+        (index == 0).then_some(PLUGIN_DESCRIPTOR)
+    }
+
+    fn create_plugin(
+        &self,
+        plugin_id: &CStr,
+        context: PluginCoreContext,
+    ) -> Option<Box<dyn PluginCore>> {
+        (plugin_id.to_bytes() == PLUGIN_ID.as_bytes()).then(|| create_plugin_core(context))
+    }
+}
 
 const fn four_char_code(value: &str) -> [u8; 4] {
     let bytes = value.as_bytes();
@@ -137,7 +170,7 @@ impl WracGainPlugin {
     }
 }
 
-/// Factory called by [`wrac_clap_adapter::export_clap_plugin!`].
+/// Called from this product's [`PluginFactory`] implementation.
 /// Called each time the host requests a new instance; returns a [`PluginCore`].
 pub(crate) fn create_plugin_core(context: PluginCoreContext) -> Box<dyn PluginCore> {
     crate::logging::init_debug_logging_once(PLUGIN_DESCRIPTOR.name);
