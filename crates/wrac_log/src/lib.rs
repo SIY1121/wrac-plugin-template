@@ -301,6 +301,7 @@ impl RtLogInner {
             );
         }
 
+        let mut drained_until = start;
         for sequence in start..total {
             if let Some(record) = self.slots[sequence as usize % RT_LOG_CAPACITY].read(sequence) {
                 log::log!(
@@ -313,9 +314,15 @@ impl RtLogInner {
                     record.sample_time,
                     record.message.as_str(),
                 );
+                drained_until = sequence + 1;
+            } else {
+                // writer は sequence number を先に予約してから slot を publish する。
+                // ここで先へ進むと、直後に publish された record を永久に読み飛ばすため、
+                // drain_sequence は連続して読めた位置までしか進めない。
+                break;
             }
         }
-        self.drain_sequence.store(total, Ordering::Release);
+        self.drain_sequence.store(drained_until, Ordering::Release);
     }
 }
 
@@ -417,11 +424,22 @@ impl FixedMessage {
 impl fmt::Write for FixedMessage {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         let remaining = RT_MESSAGE_CAPACITY.saturating_sub(self.len);
-        let count = remaining.min(value.len());
+        let count = utf8_boundary_len(value, remaining);
         self.bytes[self.len..self.len + count].copy_from_slice(&value.as_bytes()[..count]);
         self.len += count;
         Ok(())
     }
+}
+
+fn utf8_boundary_len(value: &str, limit: usize) -> usize {
+    if value.len() <= limit {
+        return value.len();
+    }
+    let mut count = limit.min(value.len());
+    while count > 0 && !value.is_char_boundary(count) {
+        count -= 1;
+    }
+    count
 }
 
 struct FixedString<const N: usize> {
@@ -586,5 +604,37 @@ fn u8_to_level(level: u8) -> Level {
         3 => Level::Info,
         5 => Level::Trace,
         _ => Level::Debug,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_stops_before_unpublished_slot() {
+        let log = RtLogInner::new("test");
+        log.next_sequence.store(1, Ordering::Release);
+
+        log.drain_to_log();
+        assert_eq!(log.drain_sequence.load(Ordering::Acquire), 0);
+
+        log.slots[0].write(0, Level::Debug, "test", 10, 20, format_args!("published"));
+        log.drain_to_log();
+        assert_eq!(log.drain_sequence.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn fixed_message_truncates_at_utf8_boundary() {
+        let mut message = FixedMessage::new();
+        let value = "a".repeat(RT_MESSAGE_CAPACITY - 1) + "あ";
+
+        message.write_str(&value).unwrap();
+
+        assert_eq!(message.len, RT_MESSAGE_CAPACITY - 1);
+        assert_eq!(
+            std::str::from_utf8(message.as_bytes()).unwrap().len(),
+            message.len
+        );
     }
 }
