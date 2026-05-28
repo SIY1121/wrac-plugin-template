@@ -25,11 +25,32 @@ function readCargoMetadata(): PluginMetadata {
     );
   }
   return {
-    pluginId: readWracMetadataString(cargoToml, "plugin_id"),
-    pluginName: readWracMetadataString(cargoToml, "plugin_name"),
+    pluginId: readFirstPluginMetadataString(cargoToml, "plugin_id"),
+    pluginName: readFirstPluginMetadataString(cargoToml, "plugin_name"),
     companyName: readWracMetadataString(cargoToml, "company_name"),
     version: versionMatch[1],
   };
+}
+
+function readFirstPluginMetadataString(cargoToml: string, key: string): string {
+  let inSection = false;
+  for (const rawLine of cargoToml.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[") && line.endsWith("]")) {
+      inSection = line === "[[package.metadata.wrac.plugins]]";
+      continue;
+    }
+    if (!inSection) {
+      continue;
+    }
+    const match = line.match(new RegExp(`^${key}\\s*=\\s*"([^"]+)"\\s*$`));
+    if (match) {
+      return match[1];
+    }
+  }
+  throw new Error(
+    `Failed to read package.metadata.wrac.plugins.${key} from src-plugin/Cargo.toml`,
+  );
 }
 
 function readWracMetadataString(cargoToml: string, key: string): string {

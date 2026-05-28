@@ -56,13 +56,16 @@ VST3 / AU / Standalone、または VST3 / AU の検証を行う場合は clap-wr
 
 ```toml
 [package.metadata.wrac]
+company_name = "Your Company"
+auv2_manufacturer_code = "YrCo"
+bundle_name = "My Plugin"
+standalone_name = "My Plugin Standalone"
+
+[[package.metadata.wrac.plugins]]
 plugin_id = "com.your-company.my-plugin"
 plugin_name = "My Plugin"
-company_name = "Your Company"
 auv2_type = "aufx"
 auv2_subtype = "MyPl"
-auv2_manufacturer_code = "YrCo"
-standalone_name = "My Plugin Standalone"
 ```
 
 > **重要:** プラグイン ID はグローバルに一意である必要があります。一度公開したら変更できません。

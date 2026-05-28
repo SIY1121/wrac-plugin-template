@@ -56,13 +56,16 @@ Edit `[package.metadata.wrac]` first.
 
 ```toml
 [package.metadata.wrac]
+company_name = "Your Company"
+auv2_manufacturer_code = "YrCo"
+bundle_name = "My Plugin"
+standalone_name = "My Plugin Standalone"
+
+[[package.metadata.wrac.plugins]]
 plugin_id = "com.your-company.my-plugin"
 plugin_name = "My Plugin"
-company_name = "Your Company"
 auv2_type = "aufx"
 auv2_subtype = "MyPl"
-auv2_manufacturer_code = "YrCo"
-standalone_name = "My Plugin Standalone"
 ```
 
 > **Important:** The plugin ID must be globally unique. It cannot be changed once published.

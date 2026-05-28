@@ -5,47 +5,62 @@ use crate::Result;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PluginMetadata {
+    pub(crate) company_name: String,
+    pub(crate) auv2_manufacturer_code: String,
+    pub(crate) bundle_name: String,
+    pub(crate) standalone_name: String,
+    pub(crate) plugins: Vec<PluginProductMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PluginProductMetadata {
     pub(crate) plugin_id: String,
     pub(crate) plugin_name: String,
-    pub(crate) company_name: String,
     pub(crate) auv2_type: String,
     pub(crate) auv2_subtype: String,
-    pub(crate) auv2_manufacturer_code: String,
-    pub(crate) standalone_name: String,
 }
 
 impl PluginMetadata {
     pub(crate) fn read(manifest_path: &Path) -> Result<Self> {
         let manifest = fs::read_to_string(manifest_path)?;
         let metadata = Self {
-            plugin_id: required_toml_string(&manifest, "plugin_id")?,
-            plugin_name: required_toml_string(&manifest, "plugin_name")?,
             company_name: required_toml_string(&manifest, "company_name")?,
-            auv2_type: required_toml_string(&manifest, "auv2_type")?,
-            auv2_subtype: required_toml_string(&manifest, "auv2_subtype")?,
             auv2_manufacturer_code: required_toml_string(&manifest, "auv2_manufacturer_code")?,
+            bundle_name: required_toml_string(&manifest, "bundle_name")?,
             standalone_name: required_toml_string(&manifest, "standalone_name")?,
+            plugins: read_plugin_products(&manifest)?,
         };
         metadata.validate()?;
         Ok(metadata)
     }
 
     pub(crate) fn clap_bundle_name(&self) -> String {
-        format!("{}.clap", self.plugin_name)
+        format!("{}.clap", self.bundle_name)
     }
 
     pub(crate) fn vst3_bundle_name(&self) -> String {
-        format!("{}.vst3", self.plugin_name)
+        format!("{}.vst3", self.bundle_name)
     }
 
     pub(crate) fn au_bundle_name(&self) -> String {
-        format!("{}.component", self.plugin_name)
+        format!("{}.component", self.bundle_name)
+    }
+
+    pub(crate) fn primary_plugin(&self) -> &PluginProductMetadata {
+        self.plugins
+            .first()
+            .expect("validated metadata must contain at least one plugin")
     }
 
     fn validate(&self) -> Result<()> {
-        validate_four_ascii("auv2_type", &self.auv2_type)?;
-        validate_four_ascii("auv2_subtype", &self.auv2_subtype)?;
+        if self.plugins.is_empty() {
+            return Err("package.metadata.wrac.plugins must contain at least one plugin".into());
+        }
         validate_four_ascii("auv2_manufacturer_code", &self.auv2_manufacturer_code)?;
+        for plugin in &self.plugins {
+            validate_four_ascii("auv2_type", &plugin.auv2_type)?;
+            validate_four_ascii("auv2_subtype", &plugin.auv2_subtype)?;
+        }
         Ok(())
     }
 }
@@ -54,6 +69,63 @@ fn required_toml_string(manifest: &str, key: &str) -> Result<String> {
     read_toml_string(manifest, "package.metadata.wrac", key).ok_or_else(|| {
         format!("missing package.metadata.wrac.{key} in src-plugin/Cargo.toml").into()
     })
+}
+
+fn read_plugin_products(manifest: &str) -> Result<Vec<PluginProductMetadata>> {
+    let mut plugins = Vec::new();
+    let mut current: Option<PluginProductMetadata> = None;
+    let mut in_plugins = false;
+
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            if let Some(plugin) = current.take() {
+                plugins.push(plugin);
+            }
+            in_plugins = line == "[[package.metadata.wrac.plugins]]";
+            if in_plugins {
+                current = Some(PluginProductMetadata {
+                    plugin_id: String::new(),
+                    plugin_name: String::new(),
+                    auv2_type: String::new(),
+                    auv2_subtype: String::new(),
+                });
+            }
+            continue;
+        }
+        if !in_plugins {
+            continue;
+        }
+        let Some((line_key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Some(value) = parse_toml_basic_string(value.trim()) else {
+            continue;
+        };
+        let plugin = current
+            .as_mut()
+            .expect("plugin table must create current metadata");
+        match line_key.trim() {
+            "plugin_id" => plugin.plugin_id = value,
+            "plugin_name" => plugin.plugin_name = value,
+            "auv2_type" => plugin.auv2_type = value,
+            "auv2_subtype" => plugin.auv2_subtype = value,
+            _ => {}
+        }
+    }
+    if let Some(plugin) = current {
+        plugins.push(plugin);
+    }
+    for plugin in &plugins {
+        if plugin.plugin_id.is_empty()
+            || plugin.plugin_name.is_empty()
+            || plugin.auv2_type.is_empty()
+            || plugin.auv2_subtype.is_empty()
+        {
+            return Err("incomplete package.metadata.wrac.plugins entry".into());
+        }
+    }
+    Ok(plugins)
 }
 
 fn read_toml_string(manifest: &str, section: &str, key: &str) -> Option<String> {

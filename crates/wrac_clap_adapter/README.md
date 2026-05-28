@@ -1,7 +1,7 @@
 # wrac_clap_adapter
 
 Defines the traits that each product crate must implement,
-and provides an adapter that maps those trait implementations to the CLAP ABI so they can be used as a plugin.
+and provides an adapter that maps those trait implementations to the CLAP ABI so they can be used as plugins.
 
 Conversion to VST3 / AU / AAX is the responsibility of `clap-wrapper`. This crate focuses solely on implementing CLAP plugins and CLAP extensions on the Rust side.
 
@@ -23,6 +23,8 @@ This crate, on the other hand, also targets VST3/AU/AAX hosts via `clap-wrapper`
 
 ## Public API
 
+- `PluginEntry`: DSO-level lifecycle and typed factory provider
+- `PluginFactory`: CLAP `clap.plugin-factory`
 - `PluginCore`: instance lifecycle and declaration of supported extensions
 - `PluginAudioPorts`: CLAP `audio-ports`
 - `PluginConfigurableAudioPorts`: CLAP `configurable-audio-ports`
@@ -33,7 +35,7 @@ This crate, on the other hand, also targets VST3/AU/AAX hosts via `clap-wrapper`
 - `PluginRender`: CLAP `render`
 - `PluginTail`: CLAP `tail`
 - `PluginLatency`: CLAP `latency`
-- `export_clap_plugin!`: exports the CLAP entry point
+- `export_clap_entry!`: exports the CLAP entry point
 
 Each trait is a thin Rust representation of the corresponding CLAP C ABI. This crate is not designed as a general plugin framework.
 
@@ -48,4 +50,4 @@ Additionally, full CLAP ABI coverage is not yet complete. Known limitations:
 - `params`: value rescan after state restore is supported, but a dynamic rescan API for the parameter schema itself is not provided
 - Output event batching helpers are minimal (sample-accurate event ordering is the product's responsibility)
 - The `audio-ports-activation` extension is not implemented
-- Exporting multiple plugins from a single binary is not supported
+- Typed factories other than plugin factory and AUv2 wrapper info are not implemented yet

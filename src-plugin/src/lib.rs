@@ -31,10 +31,7 @@ mod logging;
 mod plugin;
 mod state;
 
-// Export the CLAP entry point. The adapter generates the C ABI, factory, and lifecycle
-// machinery; here we only supply "what this plugin is" (descriptor) and "how to create
-// the core" (create).
-wrac_clap_adapter::export_clap_plugin! {
-    descriptor: crate::plugin::PLUGIN_DESCRIPTOR,
-    create: crate::plugin::create_plugin_core,
+// Export the CLAP entry point. The adapter owns the C ABI and calls the safe Rust entry.
+wrac_clap_adapter::export_clap_entry! {
+    entry: &crate::plugin::PLUGIN_ENTRY,
 }

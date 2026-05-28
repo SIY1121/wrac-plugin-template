@@ -185,12 +185,12 @@ fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
             fs::write(contents.join("PkgInfo"), "BNDL????")?;
             fs::copy(
                 ctx.dynamic_library(profile),
-                macos.join(&ctx.metadata.plugin_name),
+                macos.join(&ctx.metadata.bundle_name),
             )?;
             run(Command::new("install_name_tool")
                 .arg("-id")
-                .arg(format!("@loader_path/{}", ctx.metadata.plugin_name))
-                .arg(macos.join(&ctx.metadata.plugin_name))
+                .arg(format!("@loader_path/{}", ctx.metadata.bundle_name))
+                .arg(macos.join(&ctx.metadata.bundle_name))
                 .current_dir(&ctx.root))?;
             codesign(&bundle)?;
         }
@@ -255,7 +255,7 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
         ))
         .arg(format!(
             "-DCLAP_WRAPPER_BUILDER_OUTPUT_NAME={}",
-            ctx.metadata.plugin_name
+            ctx.metadata.bundle_name
         ))
         .arg(format!(
             "-DCLAP_WRAPPER_BUILDER_TARGET_NAME={CRATE_NAME}_{}",
@@ -291,7 +291,7 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=ON")
                 .arg(format!(
                     "-DCLAP_WRAPPER_BUILDER_STANDALONE_PLUGIN_ID={}",
-                    ctx.metadata.plugin_id
+                    ctx.metadata.primary_plugin().plugin_id
                 ))
                 .arg(format!(
                     "-DCLAP_WRAPPER_BUILDER_STANDALONE_OUTPUT_NAME={}",
@@ -311,7 +311,7 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
             ))
             .arg(format!(
                 "-DCLAP_WRAPPER_AUV2_INSTRUMENT_TYPE={}",
-                ctx.metadata.auv2_type
+                ctx.metadata.primary_plugin().auv2_type
             ))
             .arg(format!(
                 "-DCLAP_WRAPPER_AUV2_MANUFACTURER_NAME={}",
@@ -323,7 +323,7 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
             ))
             .arg(format!(
                 "-DCLAP_WRAPPER_AUV2_SUBTYPE_CODE={}",
-                ctx.metadata.auv2_subtype
+                ctx.metadata.primary_plugin().auv2_subtype
             ));
     }
 
@@ -640,8 +640,8 @@ fn validate_targets(
         run(Command::new("/usr/bin/auval")
             .args([
                 "-v",
-                &ctx.metadata.auv2_type,
-                &ctx.metadata.auv2_subtype,
+                &ctx.metadata.primary_plugin().auv2_type,
+                &ctx.metadata.primary_plugin().auv2_subtype,
                 &ctx.metadata.auv2_manufacturer_code,
             ])
             .current_dir(&ctx.root))?;
@@ -843,8 +843,8 @@ fn print_outputs(ctx: &Context, profile: BuildProfile, targets: &[Target]) {
 }
 
 fn macos_clap_info_plist(metadata: &PluginMetadata, version: &str) -> String {
-    let plugin_name = &metadata.plugin_name;
-    let plugin_id = &metadata.plugin_id;
+    let plugin_name = &metadata.bundle_name;
+    let plugin_id = &metadata.primary_plugin().plugin_id;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -1,0 +1,12 @@
+[package]
+name = "wrac_log"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+log = "0.4"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+
+[lints.rust]
+unreachable_pub = "deny"
