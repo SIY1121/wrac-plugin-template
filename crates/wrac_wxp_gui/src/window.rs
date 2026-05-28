@@ -6,7 +6,7 @@ use raw_window_handle::{
     AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle,
     WindowHandle, XcbWindowHandle,
 };
-use wrac_clap_adapter::{ClapWindow, PluginError, PluginResult};
+use wrac_clap_adapter::{HostWindow, PluginError, PluginResult};
 
 /// Wrapper that exposes the host parent window as a `raw-window-handle`.
 /// Platform branching and handle lifetime concerns are absorbed here once and
@@ -16,11 +16,11 @@ pub struct ParentWindowHandle {
     raw: RawWindowHandle,
 }
 
-impl TryFrom<ClapWindow> for ParentWindowHandle {
+impl TryFrom<HostWindow> for ParentWindowHandle {
     type Error = PluginError;
 
-    fn try_from(window: ClapWindow) -> Result<Self, Self::Error> {
-        StoredParentWindow::from_clap_window(window).to_parent_window_handle()
+    fn try_from(window: HostWindow) -> Result<Self, Self::Error> {
+        StoredParentWindow::from_host_window(window).to_parent_window_handle()
     }
 }
 
@@ -32,13 +32,13 @@ pub(crate) enum StoredParentWindow {
 }
 
 impl StoredParentWindow {
-    pub(crate) fn from_clap_window(window: ClapWindow) -> Self {
+    pub(crate) fn from_host_window(window: HostWindow) -> Self {
         match window {
-            ClapWindow::Cocoa { ns_view } => Self::Cocoa {
-                ns_view: ns_view.as_ptr() as usize,
+            HostWindow::Cocoa { ns_view } => Self::Cocoa {
+                ns_view: ns_view.get(),
             },
-            ClapWindow::Win32 { hwnd } => Self::Win32 { hwnd: hwnd.get() },
-            ClapWindow::X11 { window } => Self::X11 {
+            HostWindow::Win32 { hwnd } => Self::Win32 { hwnd: hwnd.get() },
+            HostWindow::X11 { window } => Self::X11 {
                 window: window.get(),
             },
         }

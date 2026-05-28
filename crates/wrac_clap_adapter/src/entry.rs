@@ -1,11 +1,10 @@
-use std::ffi::CStr;
 use std::sync::{Mutex, OnceLock};
 
 use crate::factory::PluginRegistrationStorage;
 use crate::{PluginCore, PluginCoreContext, PluginDescriptor, PluginResult};
 
 pub struct EntryContext<'a> {
-    pub plugin_path: Option<&'a CStr>,
+    pub plugin_path: Option<&'a str>,
 }
 
 pub trait PluginEntry: Send + Sync + 'static {
@@ -23,7 +22,7 @@ pub trait PluginFactory: Send + Sync + 'static {
     fn plugin_descriptor(&self, index: u32) -> Option<PluginDescriptor>;
     fn create_plugin(
         &self,
-        plugin_id: &CStr,
+        plugin_id: &str,
         context: PluginCoreContext,
     ) -> Option<Box<dyn PluginCore>>;
 }

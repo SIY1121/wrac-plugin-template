@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use wrac_clap_adapter::{
-    ClapWindow, GuiApi, GuiConfiguration, GuiResizeHints, GuiSize, HostGuiResizeRequester,
+    GuiApi, GuiConfiguration, GuiResizeHints, GuiSize, HostGuiResizeRequester, HostWindow,
     PluginError, PluginGui, PluginResult,
 };
 use wxp::{WebViewDispatch, dpi::LogicalSize};
@@ -790,9 +790,9 @@ impl PluginGui for WxpGuiController {
         Ok(())
     }
 
-    fn set_parent(&self, window: ClapWindow) -> PluginResult<()> {
+    fn set_parent(&self, window: HostWindow) -> PluginResult<()> {
         log::debug!("wxp controller: set_parent called");
-        let parent = StoredParentWindow::from_clap_window(window);
+        let parent = StoredParentWindow::from_host_window(window);
         let (generation, needs_parent_lease) = {
             let state = self.runtime.lock();
             let session = state.session.as_ref().ok_or(PluginError::InvalidState)?;
@@ -863,7 +863,7 @@ impl PluginGui for WxpGuiController {
         Ok(())
     }
 
-    fn set_transient(&self, _window: ClapWindow) -> PluginResult<()> {
+    fn set_transient(&self, _window: HostWindow) -> PluginResult<()> {
         Err(PluginError::Message("floating GUI is unsupported"))
     }
 

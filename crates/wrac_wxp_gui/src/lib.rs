@@ -6,10 +6,12 @@
 
 mod controller;
 mod dpi;
+mod pointer;
 mod runtime;
 mod window;
 
 pub use controller::{GuiSizeLimits, WxpGuiController, WxpGuiResizeHandle};
 pub use dpi::DpiConverter;
+pub use pointer::{GlobalPointerPosition, global_pointer_position};
 pub use runtime::{WxpGuiFactory, WxpGuiRuntime};
 pub use window::ParentWindowHandle;

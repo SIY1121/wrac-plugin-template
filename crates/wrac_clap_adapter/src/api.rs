@@ -7,10 +7,8 @@
 //! need to implement these safe traits.
 
 use std::error::Error;
-use std::ffi::{CStr, c_void};
 use std::fmt::{Display, Formatter};
-use std::num::{NonZeroIsize, NonZeroU64};
-use std::ptr::NonNull;
+use std::num::{NonZeroIsize, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 
 use clap_sys::ext::note_ports::{
@@ -168,7 +166,6 @@ pub enum AudioPortType {
     Unspecified,
     Mono,
     Stereo,
-    Other(&'static CStr),
 }
 
 #[derive(Debug, Clone)]
@@ -236,23 +233,22 @@ pub struct GuiResizeHints {
     pub aspect_ratio_height: u32,
 }
 
-/// Thin Rust representation of `clap_window_t`.
-/// Does not convert to toolkit-specific types in order to remain toolkit-neutral.
+/// Toolkit-neutral host window handle passed to GUI backends.
 #[derive(Debug, Clone, Copy)]
-pub enum ClapWindow {
-    Cocoa { ns_view: NonNull<c_void> },
+pub enum HostWindow {
+    Cocoa { ns_view: NonZeroUsize },
     Win32 { hwnd: NonZeroIsize },
     X11 { window: NonZeroU64 },
 }
 
-impl ClapWindow {
-    pub(crate) fn cocoa(ns_view: *mut c_void) -> Option<Self> {
+impl HostWindow {
+    pub(crate) fn cocoa(ns_view: *mut std::ffi::c_void) -> Option<Self> {
         Some(Self::Cocoa {
-            ns_view: NonNull::new(ns_view)?,
+            ns_view: NonZeroUsize::new(ns_view as usize)?,
         })
     }
 
-    pub(crate) fn win32(hwnd: *mut c_void) -> Option<Self> {
+    pub(crate) fn win32(hwnd: *mut std::ffi::c_void) -> Option<Self> {
         Some(Self::Win32 {
             hwnd: NonZeroIsize::new(hwnd as isize)?,
         })
@@ -438,8 +434,8 @@ pub trait PluginGui: Send + Sync + 'static {
     fn resize_hints(&self) -> Option<GuiResizeHints>;
     fn adjust_size(&self, size: GuiSize) -> PluginResult<GuiSize>;
     fn set_size(&self, size: GuiSize) -> PluginResult<()>;
-    fn set_parent(&self, window: ClapWindow) -> PluginResult<()>;
-    fn set_transient(&self, window: ClapWindow) -> PluginResult<()>;
+    fn set_parent(&self, window: HostWindow) -> PluginResult<()>;
+    fn set_transient(&self, window: HostWindow) -> PluginResult<()>;
     fn suggest_title(&self, title: &str);
     fn show(&self) -> PluginResult<()>;
     fn hide(&self) -> PluginResult<()>;

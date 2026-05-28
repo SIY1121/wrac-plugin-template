@@ -10,10 +10,17 @@ use clap_sys::events::{
     clap_event_midi, clap_event_midi_sysex, clap_event_midi2, clap_event_note,
     clap_event_note_expression, clap_event_param_gesture, clap_event_param_mod,
     clap_event_param_value, clap_event_transport, clap_input_events, clap_note_expression,
-    clap_output_events, clap_transport_flags,
+    clap_output_events,
 };
 
 use crate::api::ParameterValueEvent;
+
+const CLAP_FIXED_TIME_FACTOR: f64 = (1_i64 << 31) as f64;
+const TRANSPORT_HAS_TEMPO: u32 = 1 << 0;
+const TRANSPORT_HAS_BEATS_TIMELINE: u32 = 1 << 1;
+const TRANSPORT_HAS_SECONDS_TIMELINE: u32 = 1 << 2;
+const TRANSPORT_HAS_TIME_SIGNATURE: u32 = 1 << 3;
+const TRANSPORT_IS_PLAYING: u32 = 1 << 4;
 
 /// View that confines the CLAP event lists from `process()`/`flush()` to the callback lifetime.
 ///
@@ -583,42 +590,83 @@ impl ParameterGestureEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportFlags(u32);
+
+impl TransportFlags {
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    pub const fn has_tempo(self) -> bool {
+        self.0 & TRANSPORT_HAS_TEMPO != 0
+    }
+
+    pub const fn has_beats_timeline(self) -> bool {
+        self.0 & TRANSPORT_HAS_BEATS_TIMELINE != 0
+    }
+
+    pub const fn has_seconds_timeline(self) -> bool {
+        self.0 & TRANSPORT_HAS_SECONDS_TIMELINE != 0
+    }
+
+    pub const fn has_time_signature(self) -> bool {
+        self.0 & TRANSPORT_HAS_TIME_SIGNATURE != 0
+    }
+
+    pub const fn is_playing(self) -> bool {
+        self.0 & TRANSPORT_IS_PLAYING != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransportEvent {
     pub time: u32,
-    pub flags: clap_transport_flags,
+    pub flags: TransportFlags,
     pub tempo: f64,
     pub tempo_inc: f64,
-    pub song_pos_beats: i64,
-    pub song_pos_seconds: i64,
-    pub loop_start_beats: i64,
-    pub loop_end_beats: i64,
-    pub loop_start_seconds: i64,
-    pub loop_end_seconds: i64,
-    pub bar_start: i64,
+    pub song_position_beats: f64,
+    pub song_position_seconds: f64,
+    pub loop_start_beats: f64,
+    pub loop_end_beats: f64,
+    pub loop_start_seconds: f64,
+    pub loop_end_seconds: f64,
+    pub bar_start_beats: f64,
     pub bar_number: i32,
     pub tsig_num: u16,
     pub tsig_denom: u16,
 }
 
 impl TransportEvent {
+    pub fn song_position_beats(self) -> f64 {
+        self.song_position_beats
+    }
+
+    pub fn song_position_seconds(self) -> f64 {
+        self.song_position_seconds
+    }
+
     pub(crate) fn from_raw(raw: &clap_event_transport) -> Self {
         Self {
             time: raw.header.time,
-            flags: raw.flags,
+            flags: TransportFlags(raw.flags),
             tempo: raw.tempo,
             tempo_inc: raw.tempo_inc,
-            song_pos_beats: raw.song_pos_beats,
-            song_pos_seconds: raw.song_pos_seconds,
-            loop_start_beats: raw.loop_start_beats,
-            loop_end_beats: raw.loop_end_beats,
-            loop_start_seconds: raw.loop_start_seconds,
-            loop_end_seconds: raw.loop_end_seconds,
-            bar_start: raw.bar_start,
+            song_position_beats: fixed_time_to_float(raw.song_pos_beats),
+            song_position_seconds: fixed_time_to_float(raw.song_pos_seconds),
+            loop_start_beats: fixed_time_to_float(raw.loop_start_beats),
+            loop_end_beats: fixed_time_to_float(raw.loop_end_beats),
+            loop_start_seconds: fixed_time_to_float(raw.loop_start_seconds),
+            loop_end_seconds: fixed_time_to_float(raw.loop_end_seconds),
+            bar_start_beats: fixed_time_to_float(raw.bar_start),
             bar_number: raw.bar_number,
             tsig_num: raw.tsig_num,
             tsig_denom: raw.tsig_denom,
         }
     }
+}
+
+fn fixed_time_to_float(value: i64) -> f64 {
+    value as f64 / CLAP_FIXED_TIME_FACTOR
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
