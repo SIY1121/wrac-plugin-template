@@ -18,19 +18,19 @@ mod process_buffer;
 
 pub use api::{
     ActivateContext, AudioPortConfigurationRequest, AudioPortFlags, AudioPortInfo, AudioPortType,
-    ClapWindow, GuiApi, GuiConfiguration, GuiResizeHints, GuiSize, HostGuiResizeRequester,
-    HostParameterEditNotifier, HostStateDirtyNotifier, NoteDialects, NotePortInfo, ParameterFlags,
-    ParameterInfo, ParameterValueEvent, PluginAudioPorts, PluginConfigurableAudioPorts, PluginCore,
-    PluginCoreContext, PluginError, PluginGui, PluginLatency, PluginNotePorts, PluginParameters,
-    PluginRender, PluginResult, PluginState, PluginStateSupport, PluginTail, ProcessContext,
-    ProcessStatus, Processor, RenderMode,
+    GuiApi, GuiConfiguration, GuiResizeHints, GuiSize, HostGuiResizeRequester,
+    HostParameterEditNotifier, HostStateDirtyNotifier, HostWindow, NoteDialects, NotePortInfo,
+    ParameterFlags, ParameterInfo, ParameterValueEvent, PluginAudioPorts,
+    PluginConfigurableAudioPorts, PluginCore, PluginCoreContext, PluginError, PluginGui,
+    PluginLatency, PluginNotePorts, PluginParameters, PluginRender, PluginResult, PluginState,
+    PluginStateSupport, PluginTail, ProcessContext, ProcessStatus, Processor, RenderMode,
 };
 pub use descriptor::{Auv2Descriptor, PluginDescriptor, PluginFeature};
 pub use entry::{EntryContext, PluginEntry, PluginFactory};
 pub use events::{
     InputEvent, InputEvents, Midi2Event, MidiEvent, MidiSysexEvent, NoteEvent, NoteExpressionEvent,
     OutputEvent, OutputEvents, ParameterGestureEvent, ParameterModEvent, ProcessEvents,
-    TransportEvent, UnknownEvent,
+    TransportEvent, TransportFlags, UnknownEvent,
 };
 pub use process_buffer::{
     AudioBufferError, AudioChannelPair, AudioPairedChannels, AudioPortChannels, AudioPortPair,
@@ -39,12 +39,46 @@ pub use process_buffer::{
 
 #[doc(hidden)]
 pub mod __private {
-    pub use clap_sys::entry::clap_plugin_entry;
-    pub use clap_sys::version::CLAP_VERSION;
-    pub use std::ffi::{c_char, c_void};
-
-    pub use crate::abi::{entry_deinit, entry_get_factory, entry_init};
     pub use crate::entry::EntryRegistration;
+
+    #[repr(C)]
+    pub struct ClapVersion {
+        pub major: u32,
+        pub minor: u32,
+        pub revision: u32,
+    }
+
+    #[repr(C)]
+    pub struct ClapPluginEntry {
+        pub clap_version: ClapVersion,
+        pub init: Option<unsafe extern "C" fn(plugin_path: usize) -> bool>,
+        pub deinit: Option<unsafe extern "C" fn()>,
+        pub get_factory: Option<unsafe extern "C" fn(factory_id: usize) -> usize>,
+    }
+
+    pub const CLAP_VERSION: ClapVersion = ClapVersion {
+        major: ::clap_sys::version::CLAP_VERSION.major,
+        minor: ::clap_sys::version::CLAP_VERSION.minor,
+        revision: ::clap_sys::version::CLAP_VERSION.revision,
+    };
+
+    pub unsafe fn entry_init(registration: &'static EntryRegistration, plugin_path: usize) -> bool {
+        unsafe { crate::abi::entry_init(registration, plugin_path as *const ::std::ffi::c_char) }
+    }
+
+    pub unsafe fn entry_deinit(registration: &'static EntryRegistration) {
+        unsafe { crate::abi::entry_deinit(registration) }
+    }
+
+    pub unsafe fn entry_get_factory(
+        registration: &'static EntryRegistration,
+        factory_id: usize,
+    ) -> usize {
+        unsafe {
+            crate::abi::entry_get_factory(registration, factory_id as *const ::std::ffi::c_char)
+                as usize
+        }
+    }
 }
 
 #[macro_export]
@@ -59,9 +93,7 @@ macro_rules! export_clap_entry {
             static WRAC_CLAP_ENTRY_REGISTRATION: $crate::__private::EntryRegistration =
                 $crate::__private::EntryRegistration::new($entry);
 
-            unsafe extern "C" fn wrac_clap_entry_init(
-                plugin_path: *const $crate::__private::c_char,
-            ) -> bool {
+            unsafe extern "C" fn wrac_clap_entry_init(plugin_path: usize) -> bool {
                 $crate::__private::entry_init(&WRAC_CLAP_ENTRY_REGISTRATION, plugin_path)
             }
 
@@ -69,16 +101,14 @@ macro_rules! export_clap_entry {
                 $crate::__private::entry_deinit(&WRAC_CLAP_ENTRY_REGISTRATION)
             }
 
-            unsafe extern "C" fn wrac_clap_entry_get_factory(
-                factory_id: *const $crate::__private::c_char,
-            ) -> *const $crate::__private::c_void {
+            unsafe extern "C" fn wrac_clap_entry_get_factory(factory_id: usize) -> usize {
                 $crate::__private::entry_get_factory(&WRAC_CLAP_ENTRY_REGISTRATION, factory_id)
             }
 
             #[allow(unreachable_pub)]
             #[unsafe(no_mangle)]
-            pub static clap_entry: $crate::__private::clap_plugin_entry =
-                $crate::__private::clap_plugin_entry {
+            pub static clap_entry: $crate::__private::ClapPluginEntry =
+                $crate::__private::ClapPluginEntry {
                     clap_version: $crate::__private::CLAP_VERSION,
                     init: Some(wrac_clap_entry_init),
                     deinit: Some(wrac_clap_entry_deinit),
@@ -87,8 +117,8 @@ macro_rules! export_clap_entry {
 
             #[allow(unreachable_pub)]
             #[unsafe(no_mangle)]
-            pub extern "C" fn get_clap_entry() -> *const $crate::__private::clap_plugin_entry {
-                &clap_entry
+            pub extern "C" fn get_clap_entry() -> usize {
+                (&clap_entry as *const $crate::__private::ClapPluginEntry) as usize
             }
         }
     };

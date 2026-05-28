@@ -125,7 +125,7 @@ impl PluginInstance {
     fn new(
         registration: &'static EntryRegistration,
         descriptor_index: usize,
-        plugin_id: &CStr,
+        plugin_id: &str,
         host: *const clap_host,
     ) -> Option<Box<Self>> {
         let parameter_edits = Arc::new(ParameterEditQueue::new(host));
@@ -312,7 +312,7 @@ impl Drop for LifecycleGuard<'_> {
 ///
 /// `plugin_path` must be a valid CLAP string pointer when provided by the host.
 /// The registration must be the static registration generated for this binary.
-pub unsafe extern "C" fn entry_init(
+pub(crate) unsafe extern "C" fn entry_init(
     registration: &'static EntryRegistration,
     plugin_path: *const c_char,
 ) -> bool {
@@ -325,7 +325,15 @@ pub unsafe extern "C" fn entry_init(
         let plugin_path = if plugin_path.is_null() {
             None
         } else {
-            Some(unsafe { CStr::from_ptr(plugin_path) })
+            let plugin_path = unsafe { CStr::from_ptr(plugin_path) };
+            match plugin_path.to_str() {
+                Ok(plugin_path) => Some(plugin_path),
+                Err(error) => {
+                    log::warn!("entry.init: invalid UTF-8 plugin_path: {error}");
+                    reset_entry_init_count(registration);
+                    return false;
+                }
+            }
         };
         if let Err(error) = registration.entry.init(EntryContext { plugin_path }) {
             log::warn!("entry.init: product init failed: {error}");
@@ -340,7 +348,7 @@ pub unsafe extern "C" fn entry_init(
 ///
 /// The registration must be the same static registration previously passed to
 /// `entry_init` for this binary.
-pub unsafe extern "C" fn entry_deinit(registration: &'static EntryRegistration) {
+pub(crate) unsafe extern "C" fn entry_deinit(registration: &'static EntryRegistration) {
     ffi_unit(|| {
         if entry_init_count(registration) == 0 {
             log::warn!("entry.deinit: called while entry is not initialized");
@@ -357,7 +365,7 @@ pub unsafe extern "C" fn entry_deinit(registration: &'static EntryRegistration) 
 ///
 /// `factory_id` must be null or point to a valid NUL-terminated CLAP factory id.
 /// The returned pointer is owned by the static plugin registration storage.
-pub unsafe extern "C" fn entry_get_factory(
+pub(crate) unsafe extern "C" fn entry_get_factory(
     registration: &'static EntryRegistration,
     factory_id: *const c_char,
 ) -> *const c_void {
@@ -466,13 +474,19 @@ pub(crate) unsafe extern "C" fn factory_create_plugin(
             return ptr::null();
         };
         let registration = factory_state.registration;
-        let plugin_id = unsafe { CStr::from_ptr(plugin_id) };
+        let plugin_id = match unsafe { CStr::from_ptr(plugin_id) }.to_str() {
+            Ok(plugin_id) => plugin_id,
+            Err(error) => {
+                log::warn!("factory.create_plugin: invalid UTF-8 plugin id: {error}");
+                return ptr::null();
+            }
+        };
         let storage = registration.storage();
         let Some((descriptor_index, _descriptor)) = storage
             .descriptors
             .iter()
             .enumerate()
-            .find(|(_, descriptor)| descriptor.descriptor().id.as_bytes() == plugin_id.to_bytes())
+            .find(|(_, descriptor)| descriptor.descriptor().id == plugin_id)
         else {
             log::warn!("factory.create_plugin: requested unknown plugin id");
             return ptr::null();

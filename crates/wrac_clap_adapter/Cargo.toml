@@ -9,7 +9,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
-clap-sys = "0.5.0"
+clap-sys = { workspace = true }
 log = "0.4"
 parking_lot = "0.12"
 

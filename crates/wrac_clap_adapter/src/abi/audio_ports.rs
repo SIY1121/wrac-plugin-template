@@ -104,6 +104,5 @@ fn audio_port_type(port_type: AudioPortType) -> *const c_char {
         AudioPortType::Unspecified => ptr::null(),
         AudioPortType::Mono => CLAP_PORT_MONO.as_ptr(),
         AudioPortType::Stereo => CLAP_PORT_STEREO.as_ptr(),
-        AudioPortType::Other(name) => name.as_ptr(),
     }
 }

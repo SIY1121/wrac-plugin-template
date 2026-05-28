@@ -1,13 +1,11 @@
 use std::cell::RefCell;
-#[cfg(target_os = "macos")]
-use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
 use wrac_clap_adapter::HostGuiResizeRequester;
-use wrac_wxp_gui::WxpGuiResizeHandle;
+use wrac_wxp_gui::{WxpGuiResizeHandle, global_pointer_position};
 use wxp::WxpCommandHandler;
 
 #[derive(Debug, Deserialize)]
@@ -41,59 +39,6 @@ struct NativeResizeDrag {
     start_height: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct GlobalMouseLocation {
-    x: f64,
-    y: f64,
-}
-
-#[cfg(target_os = "macos")]
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct CGPoint {
-    x: f64,
-    y: f64,
-}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGEventCreate(source: *const c_void) -> *mut c_void;
-    fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
-}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFRelease(cf: *const c_void);
-}
-
-fn global_mouse_location() -> Option<GlobalMouseLocation> {
-    #[cfg(target_os = "macos")]
-    {
-        // The resize grip lives inside the WebView, but the editor window being resized is
-        // owned by the host. Hosts such as Logic move the WebView during a drag, so WebView
-        // coordinates land relative to the moving child view rather than the physical mouse.
-        // Reading the OS cursor directly gives a stable coordinate space (the desktop) that
-        // is unaffected by WebView and host layout updates.
-        let event = unsafe { CGEventCreate(std::ptr::null()) };
-        if event.is_null() {
-            return None;
-        }
-        let location = unsafe { CGEventGetLocation(event) };
-        unsafe { CFRelease(event.cast()) };
-        Some(GlobalMouseLocation {
-            x: location.x,
-            y: location.y,
-        })
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        None
-    }
-}
-
 pub(super) fn register_resize_commands(
     command_handler: &Rc<WxpCommandHandler>,
     host_gui_resize_requester: Arc<dyn HostGuiResizeRequester>,
@@ -113,7 +58,7 @@ pub(super) fn register_resize_commands(
             let request = ctx
                 .arg::<BeginGuiResizeDragRequest>("request")
                 .map_err(|e| e.to_string())?;
-            let Some(mouse) = global_mouse_location() else {
+            let Some(mouse) = global_pointer_position() else {
                 return Ok::<_, String>(json!({ "ok": false }));
             };
 
@@ -155,7 +100,7 @@ pub(super) fn register_resize_commands(
             let native_request = request.drag_id.and_then(|drag_id| {
                 let drag = native_resize_drag.borrow();
                 let drag = drag.as_ref().filter(|drag| drag.drag_id == drag_id)?;
-                let mouse = global_mouse_location()?;
+                let mouse = global_pointer_position()?;
                 Some((
                     drag.start_width + (mouse.x - drag.start_mouse_x),
                     drag.start_height + (mouse.y - drag.start_mouse_y),

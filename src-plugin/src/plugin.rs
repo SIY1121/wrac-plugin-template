@@ -10,7 +10,6 @@
 //! Format differences between CLAP, VST3, and AU are absorbed by `wrac_clap_adapter`,
 //! so this module focuses solely on "which capabilities this plugin offers."
 
-use std::ffi::CStr;
 use std::sync::Arc;
 
 mod audio_ports;
@@ -98,10 +97,10 @@ impl PluginFactory for WracGainFactory {
 
     fn create_plugin(
         &self,
-        plugin_id: &CStr,
+        plugin_id: &str,
         context: PluginCoreContext,
     ) -> Option<Box<dyn PluginCore>> {
-        (plugin_id.to_bytes() == PLUGIN_ID.as_bytes()).then(|| create_plugin_core(context))
+        (plugin_id == PLUGIN_ID).then(|| create_plugin_core(context))
     }
 }
 

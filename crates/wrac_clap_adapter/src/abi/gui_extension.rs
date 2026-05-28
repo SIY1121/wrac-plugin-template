@@ -11,7 +11,7 @@ use parking_lot::MutexGuard;
 
 use super::PluginInstance;
 use super::ffi::{ffi_bool, ffi_unit};
-use crate::{ClapWindow, GuiApi, GuiConfiguration, GuiSize, PluginGui};
+use crate::{GuiApi, GuiConfiguration, GuiSize, HostWindow, PluginGui};
 
 pub(super) static GUI: clap_plugin_gui = clap_plugin_gui {
     is_api_supported: Some(gui_is_api_supported),
@@ -390,12 +390,12 @@ unsafe fn plugin_gui_mutation(
         .map(|gui| GuiMutationAccess { gui, _guard: guard })
 }
 
-unsafe fn clap_window_to_rust(window: &clap_window) -> Option<ClapWindow> {
+unsafe fn clap_window_to_rust(window: &clap_window) -> Option<HostWindow> {
     let api = gui_api_from_c(window.api)?;
     match api {
-        GuiApi::Cocoa => ClapWindow::cocoa(unsafe { window.specific.cocoa }),
-        GuiApi::Win32 => ClapWindow::win32(unsafe { window.specific.win32 }),
-        GuiApi::X11 => ClapWindow::x11(clap_x11_window_id(window)),
+        GuiApi::Cocoa => HostWindow::cocoa(unsafe { window.specific.cocoa }),
+        GuiApi::Win32 => HostWindow::win32(unsafe { window.specific.win32 }),
+        GuiApi::X11 => HostWindow::x11(clap_x11_window_id(window)),
     }
 }
 
