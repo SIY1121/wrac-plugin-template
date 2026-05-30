@@ -172,7 +172,7 @@ impl WracGainPlugin {
 /// Called from this product's [`PluginFactory`] implementation.
 /// Called each time the host requests a new instance; returns a [`PluginCore`].
 pub(crate) fn create_plugin_core(context: PluginCoreContext) -> Box<dyn PluginCore> {
-    crate::logging::init_debug_logging_once(PLUGIN_DESCRIPTOR.name);
+    wrac_log::init!(PLUGIN_DESCRIPTOR.name);
 
     log::debug!(
         "creating plugin core: id={}, name={}",
