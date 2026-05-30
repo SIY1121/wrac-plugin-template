@@ -27,7 +27,6 @@ static ALLOC_DISABLER: AllocDisabler = AllocDisabler;
 mod audio;
 mod commands;
 mod gui;
-mod logging;
 mod plugin;
 mod state;
 
