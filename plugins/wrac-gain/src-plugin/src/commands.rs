@@ -37,7 +37,7 @@ pub(crate) fn register_commands(
     // plugin's logger so GUI initialisation progress is visible in native log output.
     command_handler.register_sync("write_to_log", move |ctx| {
         let message = ctx.arg::<String>("message").map_err(|e| e.to_string())?;
-        log::info!("frontend: {message}");
+        log::debug!("frontend: {message}");
         Ok::<_, String>(json!({ "ok": true }))
     });
 

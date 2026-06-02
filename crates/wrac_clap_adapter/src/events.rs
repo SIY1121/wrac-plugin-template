@@ -60,11 +60,11 @@ impl<'a> InputEvents<'a> {
 
     pub fn len(&self) -> u32 {
         if self.raw.is_null() {
-            log::debug!("input_events.len: null input event list");
+            wrac_log::rtdebug!("input_events.len: null input event list");
             return 0;
         }
         let Some(size) = (unsafe { (*self.raw).size }) else {
-            log::warn!("input_events.len: event list has no size callback");
+            wrac_log::rtwarn!("input_events.len: event list has no size callback");
             return 0;
         };
         unsafe { size(self.raw) }
@@ -76,16 +76,16 @@ impl<'a> InputEvents<'a> {
 
     pub fn get(&self, index: u32) -> Option<InputEvent> {
         if index >= self.len() || self.raw.is_null() {
-            log::warn!("input_events.get: invalid index={index}");
+            wrac_log::rtwarn!("input_events.get: invalid index={index}");
             return None;
         }
         let Some(get) = (unsafe { (*self.raw).get }) else {
-            log::warn!("input_events.get: event list has no get callback index={index}");
+            wrac_log::rtwarn!("input_events.get: event list has no get callback index={index}");
             return None;
         };
         let header = unsafe { get(self.raw, index) };
         if header.is_null() {
-            log::warn!("input_events.get: host returned null event header index={index}");
+            wrac_log::rtwarn!("input_events.get: host returned null event header index={index}");
             return None;
         }
         unsafe { InputEvent::from_header(&*header) }
@@ -148,7 +148,7 @@ impl<'a> OutputEvents<'a> {
 
     pub fn try_push(&mut self, event: OutputEvent) -> bool {
         let Some(try_push) = self.try_push_raw() else {
-            log::warn!("output_events.try_push: output event queue is unavailable");
+            wrac_log::rtwarn!("output_events.try_push: output event queue is unavailable");
             return false;
         };
 
@@ -203,7 +203,7 @@ impl<'a> OutputEvents<'a> {
             }
         };
         if !pushed {
-            log::warn!("output_events.try_push: host rejected event");
+            wrac_log::rtwarn!("output_events.try_push: host rejected event");
         }
         pushed
     }
@@ -213,12 +213,12 @@ impl<'a> OutputEvents<'a> {
     ) -> Option<unsafe extern "C" fn(*const clap_output_events, *const clap_event_header) -> bool>
     {
         if self.raw.is_null() {
-            log::debug!("output_events.try_push_raw: null output event list");
+            wrac_log::rtdebug!("output_events.try_push_raw: null output event list");
             return None;
         }
         let try_push = unsafe { (*self.raw).try_push };
         if try_push.is_none() {
-            log::warn!("output_events.try_push_raw: event list has no try_push callback");
+            wrac_log::rtwarn!("output_events.try_push_raw: event list has no try_push callback");
         }
         try_push
     }

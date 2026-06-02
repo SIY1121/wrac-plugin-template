@@ -48,12 +48,6 @@ impl PluginStateSupport for WracGainStateSupport {
     fn save_state(&self) -> PluginResult<PluginState> {
         let project = self.project_state.snapshot();
         let params = self.shared.snapshot_parameters();
-        log::debug!(
-            "saving plugin state: gain={}, bypass={}, editor_page={}",
-            params.gain,
-            params.bypass,
-            project.editor_page.as_str()
-        );
         let bytes = serde_json::to_vec(&SavedPluginState {
             gain: params.gain,
             bypass: params.bypass,

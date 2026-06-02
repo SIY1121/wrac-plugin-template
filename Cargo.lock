@@ -2906,6 +2906,7 @@ dependencies = [
  "clap-sys",
  "log",
  "parking_lot",
+ "wrac_log",
 ]
 
 [[package]]

@@ -635,10 +635,10 @@ unsafe extern "C" fn plugin_reset(plugin: *const clap_plugin) {
             if let Some(processor) = processor {
                 processor.reset();
             } else {
-                log::debug!("plugin.reset: no processor is available");
+                wrac_log::rtdebug!("plugin.reset: no processor is available");
             }
         }) else {
-            log::warn!("plugin.reset: processor is busy");
+            wrac_log::rtwarn!("plugin.reset: processor is busy");
             return;
         };
     });
@@ -655,7 +655,7 @@ unsafe extern "C" fn plugin_process(
         };
 
         if process.is_null() {
-            log::warn!("plugin.process: null process pointer");
+            wrac_log::rtwarn!("plugin.process: null process pointer");
             return CLAP_PROCESS_SLEEP;
         }
         let process = unsafe { &*process };
@@ -667,7 +667,7 @@ unsafe extern "C" fn plugin_process(
         let audio = match unsafe { audio_buffers(process) } {
             Ok(audio) => audio,
             Err(error) => {
-                log::error!("plugin.process: invalid audio buffers: {error}");
+                wrac_log::rterror!("plugin.process: invalid audio buffers: {error}");
                 return CLAP_PROCESS_ERROR;
             }
         };
@@ -678,7 +678,7 @@ unsafe extern "C" fn plugin_process(
         // sleep/error without waiting.
         let Some(result) = instance.with_processor_mut(|processor| {
             let Some(processor) = processor else {
-                log::debug!("plugin.process: no processor is available");
+                wrac_log::rtdebug!("plugin.process: no processor is available");
                 return CLAP_PROCESS_SLEEP;
             };
 
@@ -693,12 +693,12 @@ unsafe extern "C" fn plugin_process(
                 Ok(ProcessStatus::Tail) => CLAP_PROCESS_TAIL,
                 Ok(ProcessStatus::Sleep) => CLAP_PROCESS_SLEEP,
                 Err(error) => {
-                    log::error!("plugin.process: processor failed: {error}");
+                    wrac_log::rterror!("plugin.process: processor failed: {error}");
                     CLAP_PROCESS_ERROR
                 }
             }
         }) else {
-            log::warn!("plugin.process: processor is busy");
+            wrac_log::rtwarn!("plugin.process: processor is busy");
             return CLAP_PROCESS_SLEEP;
         };
         result
