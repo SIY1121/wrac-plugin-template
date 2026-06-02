@@ -180,7 +180,7 @@ pub(crate) fn create_plugin_core(context: PluginCoreContext) -> Box<dyn PluginCo
         PLUGIN_DESCRIPTOR.name
     );
     for parameter in [gain_parameter_info(), bypass_parameter_info()] {
-        log::info!(
+        log::debug!(
             "host parameter schema: id={}, name={}, min={}, max={}, default={}, automatable={}, stepped={}, enum={}, bypass={}",
             parameter.id,
             parameter.name,

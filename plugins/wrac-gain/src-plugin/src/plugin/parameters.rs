@@ -36,22 +36,16 @@ impl WracGainParameters {
 impl PluginParameters for WracGainParameters {
     fn parameter_count(&self) -> u32 {
         // When adding a new parameter: keep this count in sync with the `parameter_info()` match.
-        log::debug!("parameter_count -> 2");
         2
     }
 
     fn parameter_info(&self, index: u32) -> Option<ParameterInfo> {
         // Mapping of sequential index to stable ID. IDs persist in project/automation data — never change them.
-        let info = match index {
+        match index {
             0 => Some(gain_parameter_info()),
             1 => Some(bypass_parameter_info()),
             _ => None,
-        };
-        log::debug!(
-            "parameter_info: index={index} -> {:?}",
-            info.as_ref().map(|info| (info.id, info.name))
-        );
-        info
+        }
     }
 
     /// Answers the host's query for the current value of a parameter.

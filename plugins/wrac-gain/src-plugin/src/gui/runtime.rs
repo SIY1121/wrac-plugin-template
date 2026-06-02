@@ -78,10 +78,7 @@ impl WracGainGuiRuntime {
             initial_size.height
         );
 
-        // Register parameter commands callable from the WebView.
-        log::debug!("creating GUI runtime: creating command handler");
         let command_handler = Rc::new(WxpCommandHandler::new());
-        log::debug!("creating GUI runtime: registering commands");
         register_commands(
             command_handler.clone(),
             dependencies.project_state.clone(),
@@ -91,7 +88,6 @@ impl WracGainGuiRuntime {
             dependencies.host_gui_resize_requester,
             dependencies.resize_handle,
         );
-        log::debug!("creating GUI runtime: commands registered");
 
         let webview = WxpWebViewSession::create(
             WxpWebViewConfig {
@@ -120,9 +116,7 @@ impl WracGainGuiRuntime {
                 gui_notifier.notify_parameter(PARAM_GAIN_ID, shared.gain());
             }
         });
-        log::debug!("creating GUI runtime: starting GUI update timer");
         gui_update_timer.start();
-        log::debug!("creating GUI runtime: GUI update timer started");
 
         log::debug!("creating GUI runtime: completed");
         Ok(Self {
