@@ -10,6 +10,7 @@ use crate::{Result, XtaskConfig};
 #[derive(Debug, Clone)]
 pub(crate) struct PluginPackage {
     pub(crate) package_name: String,
+    pub(crate) artifact_namespace: String,
     pub(crate) manifest_path: PathBuf,
     pub(crate) plugin_root: PathBuf,
 }
@@ -38,7 +39,7 @@ impl Context {
         // directory across plugins would make artifacts overwrite or cross-contaminate.
         let target_dir = target_root
             .join(&config.target_namespace)
-            .join(&package.package_name);
+            .join(&package.artifact_namespace);
         // CLAP_WRAPPER_DIR remains an escape hatch for testing SDK changes or a temporary external checkout.
         let wrapper_dir = std::env::var_os("CLAP_WRAPPER_DIR")
             .map(PathBuf::from)
@@ -146,8 +147,19 @@ pub(crate) fn available_packages(config: &XtaskConfig) -> Result<Vec<PluginPacka
                 )
             })?
             .to_path_buf();
+        let artifact_namespace = plugin_root
+            .file_name()
+            .ok_or_else(|| {
+                format!(
+                    "failed to derive artifact namespace from plugin root: {}",
+                    plugin_root.display()
+                )
+            })?
+            .to_string_lossy()
+            .into_owned();
         packages.push(PluginPackage {
             package_name: package.name.clone(),
+            artifact_namespace,
             manifest_path,
             plugin_root,
         });
