@@ -27,7 +27,10 @@ class CLAPVST3StreamAdapter
   {
     auto self = static_cast<CLAPVST3StreamAdapter *>(stream->ctx);
     Steinberg::int32 bytesRead = 0;
-    if (kResultOk == self->vst_stream->read(buffer, (int32)size, &bytesRead)) return bytesRead;
+    const auto result = self->vst_stream->read(buffer, (int32)size, &bytesRead);
+    // Some VST3 hosts report EOF as kResultFalse. CLAP treats EOF as a
+    // successful zero-byte read, so prefer the byte count for non-error results.
+    if (result == kResultOk || result == kResultFalse) return bytesRead;
     return -1;
   }
   static int64_t write(const struct clap_ostream *stream, const void *buffer, uint64_t size)
