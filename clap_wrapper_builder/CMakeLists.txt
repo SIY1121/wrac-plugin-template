@@ -44,8 +44,8 @@ project(clap_wrapper_builder)
 #     CLAP_WRAPPER_BUILDER_STANDALONE_OUTPUT_NAME  Optional. Defaults to
 #                                                  "<name> Standalone".
 #
-# Dependency SDKs (clap, clap-wrapper, vst3sdk, AudioUnitSDK) live alongside
-# this file as git submodules.
+# clap-wrapper is vendored as a git subtree. The clap, vst3sdk, and
+# AudioUnitSDK dependency SDKs live alongside this file as git submodules.
 # ---------------------------------------------------------------------------
 
 # Require C++23 or later (required by clap-wrapper and AudioUnitSDK)

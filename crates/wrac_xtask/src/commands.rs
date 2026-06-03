@@ -796,8 +796,8 @@ pub(crate) fn clean(ctx: &Context) -> Result<()> {
 }
 
 fn ensure_wrapper_inputs(ctx: &Context, needs_vst3: bool, needs_au: bool) -> Result<()> {
-    // An uninitialized git submodule may leave only an empty directory in place.
-    // Rather than letting CMake fail with an opaque error, check the sentinel files the wrapper actually reads.
+    // Missing subtree files or uninitialized SDK submodules otherwise surface as opaque CMake errors.
+    // Check the sentinel files the wrapper actually reads.
     ensure_exists(&ctx.wrapper_dir, "clap_wrapper_builder directory")?;
     ensure_exists(
         &ctx.wrapper_dir.join("clap-wrapper").join("CMakeLists.txt"),
