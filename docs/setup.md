@@ -47,7 +47,7 @@ git submodule update --init --recursive
 ```
 
 Submodules are not needed if you are only building CLAP.
-The clap-wrapper-related submodules are required when building VST3 / AU / Standalone, or when validating VST3 / AU.
+The SDK submodules used by clap-wrapper are required when building VST3 / AU / Standalone, or when validating VST3 / AU.
 
 ### 2. Configure Plugin Identity
 

@@ -47,7 +47,7 @@ git submodule update --init --recursive
 ```
 
 CLAP のみをビルドする場合、サブモジュールは不要です。
-VST3 / AU / Standalone、または VST3 / AU の検証を行う場合は clap-wrapper 関連のサブモジュールが必要です。
+VST3 / AU / Standalone、または VST3 / AU の検証を行う場合は clap-wrapper が利用する SDK サブモジュールが必要です。
 
 ### 2. プラグイン identity を設定する
 

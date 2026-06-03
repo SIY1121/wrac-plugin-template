@@ -7,8 +7,9 @@ into VST3 / AUv2 / AAX / Standalone bundles.
 
 - `CMakeLists.txt` - The wrapper build definition. The full input-variable
   reference lives in the header comment at the top of this file.
-- `clap` / `clap-wrapper` / `vst3sdk` / `AudioUnitSDK` - Dependency SDKs,
-  checked out as git submodules.
+- `clap-wrapper` - Vendored wrapper source, tracked as a git subtree.
+- `clap` / `vst3sdk` / `AudioUnitSDK` - Dependency SDKs, checked out as git
+  submodules.
 
 ## Usage
 

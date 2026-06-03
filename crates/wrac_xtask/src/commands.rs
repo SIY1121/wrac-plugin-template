@@ -23,7 +23,7 @@ pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
     let targets = resolve_build_targets(ctx.platform, &args.target)?;
 
     // Missing wrapper inputs surface as CMake errors after npm/cargo have already run,
-    // making the root cause hard to diagnose. Check submodule contents upfront only
+    // making the root cause hard to diagnose. Check wrapper inputs upfront only
     // when the selected targets require a wrapper.
     if targets.iter().any(|target| target.is_wrapper()) || targets.contains(&Target::Standalone) {
         ensure_wrapper_inputs(
@@ -796,12 +796,12 @@ pub(crate) fn clean(ctx: &Context) -> Result<()> {
 }
 
 fn ensure_wrapper_inputs(ctx: &Context, needs_vst3: bool, needs_au: bool) -> Result<()> {
-    // An uninitialized git submodule may leave only an empty directory in place.
-    // Rather than letting CMake fail with an opaque error, check the sentinel files the wrapper actually reads.
+    // Missing subtree files or uninitialized SDK submodules otherwise surface as opaque CMake errors.
+    // Check the sentinel files the wrapper actually reads.
     ensure_exists(&ctx.wrapper_dir, "clap_wrapper_builder directory")?;
     ensure_exists(
         &ctx.wrapper_dir.join("clap-wrapper").join("CMakeLists.txt"),
-        "clap-wrapper submodule",
+        "clap-wrapper subtree",
     )?;
     ensure_exists(
         &ctx.wrapper_dir
