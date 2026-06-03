@@ -33,3 +33,19 @@ staging.
 
 AAX is off by default and requires the Avid AAX SDK. Enable it with
 `-DCLAP_WRAPPER_BUILDER_BUILD_AAX=ON` once the SDK is available.
+
+## Maintaining the clap-wrapper subtree
+
+`clap-wrapper` is vendored as ordinary files, not as an active submodule, but it
+keeps git-subtree metadata in history. Use `git subtree pull` for upstream
+updates. Put project-specific follow-up changes in later, small logical commits.
+
+Update command example:
+
+```bash
+git subtree pull \
+  --prefix=clap_wrapper_builder/clap-wrapper \
+  https://github.com/free-audio/clap-wrapper.git \
+  next \
+  -m "Update clap-wrapper from free-audio next"
+```
