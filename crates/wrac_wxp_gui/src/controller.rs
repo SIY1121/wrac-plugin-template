@@ -1013,12 +1013,6 @@ impl PluginGuiExtension for WxpGuiController {
         Ok(())
     }
 
-    fn set_transient(&self, _window: HostWindow) -> PluginResult<()> {
-        Err(PluginError::Message("floating GUI is unsupported"))
-    }
-
-    fn suggest_title(&self, _title: &str) {}
-
     fn show(&self) -> PluginResult<()> {
         log::debug!("wxp controller: show called");
         let action = {
