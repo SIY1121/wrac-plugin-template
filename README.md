@@ -96,6 +96,13 @@ cargo xtask validate
 cargo xtask install
 ```
 
+`cargo xtask validate` runs WRAC host-compatibility rules before external format validators. Rule violations are errors and return a non-zero exit code. A rule can be disabled only with a documented reason in the plugin crate manifest:
+
+```toml
+[package.metadata.wrac.validation.disabled_rules.fender-studio-pro-generic-editor-single-knob]
+reason = "This product does not support Fender Studio Pro generic editor workflows."
+```
+
 Build and launch the standalone app:
 
 ```bash

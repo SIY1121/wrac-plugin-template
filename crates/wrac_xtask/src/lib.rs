@@ -10,6 +10,7 @@ mod metadata;
 mod profile;
 mod targets;
 mod util;
+mod validation;
 
 use cli::{Cli, Commands};
 use commands::{build, clean, install, launch, uninstall, validate};
@@ -146,10 +147,13 @@ fn args_for_install_build(ctx: &Context, args: &cli::InstallArgs) -> Result<cli:
 }
 
 fn args_for_validate_build(ctx: &Context, args: &cli::ValidateArgs) -> Result<cli::BuildArgs> {
-    let targets = resolve_validate_targets(ctx.platform, &args.target)?
+    let mut targets = resolve_validate_targets(ctx.platform, &args.target)?
         .into_iter()
         .map(|target| target.target())
-        .collect();
+        .collect::<Vec<_>>();
+    if !targets.contains(&Target::Clap) {
+        targets.push(Target::Clap);
+    }
     Ok(args_for_implicit_build(args.release, targets))
 }
 

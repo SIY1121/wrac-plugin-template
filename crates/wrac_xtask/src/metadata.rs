@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -15,6 +15,18 @@ pub(crate) struct PluginMetadata {
     pub(crate) bundle_name: String,
     pub(crate) standalone_name: String,
     pub(crate) plugins: Vec<PluginProductMetadata>,
+    pub(crate) validation: ValidationMetadata,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ValidationMetadata {
+    #[serde(default)]
+    pub(crate) disabled_rules: HashMap<String, DisabledValidationRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct DisabledValidationRule {
+    pub(crate) reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +55,7 @@ impl PluginMetadata {
             bundle_name: wrac.bundle_name,
             standalone_name: wrac.standalone_name,
             plugins: wrac.plugins,
+            validation: wrac.validation.unwrap_or_default(),
         };
         metadata.validate()?;
         Ok(metadata)
@@ -108,6 +121,12 @@ impl PluginMetadata {
                 .into());
             }
         }
+        for (rule_id, disabled) in &self.validation.disabled_rules {
+            validate_required(
+                &format!("package.metadata.wrac.validation.disabled_rules.{rule_id}.reason"),
+                disabled.reason.trim(),
+            )?;
+        }
         Ok(())
     }
 }
@@ -154,4 +173,5 @@ struct WracMetadata {
     standalone_name: String,
     #[serde(default)]
     plugins: Vec<PluginProductMetadata>,
+    validation: Option<ValidationMetadata>,
 }
