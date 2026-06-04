@@ -57,8 +57,6 @@ npm run dev
 
 Then launch your DAW and insert **WRAC Gain** (a plugin rescan may be required).
 
-If it works, a quick note at [DAW Compatibility Reports](https://github.com/novonotes/wrac-plugin-template/discussions/6) is a big help for the community!
-
 To build your own plugin based on this template, see [Setup](docs/setup.md).
 
 ## FAQ

@@ -54,8 +54,6 @@ npm run dev
 
 その後、DAW を起動して **WRAC Gain** を挿入してください（プラグインの再スキャンが必要な場合があります）。
 
-動いたら [DAW互換性報告](https://github.com/novonotes/wrac-plugin-template/discussions/6) に一言いただけるとコミュニティにとって大変助かります！
-
 このテンプレートを元に自分のプラグインを作る場合は [Setup](docs/setup_JA.md) を参照してください。
 
 ## FAQ
