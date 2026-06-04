@@ -25,8 +25,11 @@ pub(super) static GUI: clap_plugin_gui = clap_plugin_gui {
     adjust_size: Some(gui_adjust_size),
     set_size: Some(gui_set_size),
     set_parent: Some(gui_set_parent),
-    set_transient: None,
-    suggest_title: None,
+    // Bitwig 5.2.7 rejects the GUI extension before querying embedded support if these
+    // floating-window callbacks are null, so provide stubs while still reporting no
+    // floating API support from `is_api_supported`.
+    set_transient: Some(gui_set_transient),
+    suggest_title: Some(gui_suggest_title),
     show: Some(gui_show),
     hide: Some(gui_hide),
 };
@@ -270,6 +273,24 @@ unsafe extern "C" fn gui_set_parent(
             }
         }
     })
+}
+
+unsafe extern "C" fn gui_set_transient(
+    plugin: *const clap_plugin,
+    _window: *const clap_window,
+) -> bool {
+    ffi_bool(|| {
+        if unsafe { plugin_gui_query(plugin) }.is_none() {
+            return false;
+        }
+        false
+    })
+}
+
+unsafe extern "C" fn gui_suggest_title(plugin: *const clap_plugin, _title: *const c_char) {
+    ffi_unit(|| {
+        let _ = unsafe { plugin_gui_query(plugin) };
+    });
 }
 
 unsafe extern "C" fn gui_show(plugin: *const clap_plugin) -> bool {
