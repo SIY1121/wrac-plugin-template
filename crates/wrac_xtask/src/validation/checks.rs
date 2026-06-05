@@ -65,6 +65,8 @@ pub(crate) fn evaluate_checks(
     {
         let violations = if visible_non_bypass_count == 1 {
             vec![RuleViolation {
+                plugin_id: schema.plugin_id.clone(),
+                plugin_name: schema.plugin_name.clone(),
                 location: location.to_path_buf(),
                 rule_id: RULE_FENDER_SINGLE_KNOB,
                 message: format!(
@@ -78,6 +80,7 @@ pub(crate) fn evaluate_checks(
         push_check_result(
             &mut results,
             validation,
+            schema,
             RULE_FENDER_SINGLE_KNOB,
             CheckStatus::from_violations(violations),
         );
@@ -85,6 +88,7 @@ pub(crate) fn evaluate_checks(
         push_check_result(
             &mut results,
             validation,
+            schema,
             RULE_FENDER_SINGLE_KNOB,
             CheckStatus::Skipped("CLAP or VST3 validation was not requested."),
         );
@@ -95,6 +99,8 @@ pub(crate) fn evaluate_checks(
         for (index, param) in schema.params.iter().enumerate() {
             if param.id != index as u32 {
                 violations.push(RuleViolation {
+                    plugin_id: schema.plugin_id.clone(),
+                    plugin_name: schema.plugin_name.clone(),
                     location: location.to_path_buf(),
                     rule_id: RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
                     message: format!(
@@ -108,6 +114,7 @@ pub(crate) fn evaluate_checks(
         push_check_result(
             &mut results,
             validation,
+            schema,
             RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
             CheckStatus::from_violations(violations),
         );
@@ -115,6 +122,7 @@ pub(crate) fn evaluate_checks(
         push_check_result(
             &mut results,
             validation,
+            schema,
             RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
             CheckStatus::Skipped("VST3 validation was not requested."),
         );
@@ -123,6 +131,8 @@ pub(crate) fn evaluate_checks(
     let mut bypass_shape_violations = Vec::new();
     if bypass_params.len() > 1 {
         bypass_shape_violations.push(RuleViolation {
+            plugin_id: schema.plugin_id.clone(),
+            plugin_name: schema.plugin_name.clone(),
             location: location.to_path_buf(),
             rule_id: RULE_BYPASS_PARAM_SHAPE,
             message: format!(
@@ -144,6 +154,8 @@ pub(crate) fn evaluate_checks(
             || !default_is_boolean
         {
             bypass_shape_violations.push(RuleViolation {
+                plugin_id: schema.plugin_id.clone(),
+                plugin_name: schema.plugin_name.clone(),
                 location: location.to_path_buf(),
                 rule_id: RULE_BYPASS_PARAM_SHAPE,
                 message: format!(
@@ -157,6 +169,7 @@ pub(crate) fn evaluate_checks(
     push_check_result(
         &mut results,
         validation,
+        schema,
         RULE_BYPASS_PARAM_SHAPE,
         CheckStatus::from_violations(bypass_shape_violations),
     );
@@ -167,6 +180,8 @@ pub(crate) fn evaluate_checks(
         .all(|param| !param.flags.contains(CLAP_PARAM_IS_BYPASS))
     {
         vec![RuleViolation {
+            plugin_id: schema.plugin_id.clone(),
+            plugin_name: schema.plugin_name.clone(),
             location: location.to_path_buf(),
             rule_id: RULE_PLUGIN_REQUIRES_BYPASS,
             message: "Production plugins should expose a host bypass parameter.".to_string(),
@@ -178,6 +193,7 @@ pub(crate) fn evaluate_checks(
     push_check_result(
         &mut results,
         validation,
+        schema,
         RULE_PLUGIN_REQUIRES_BYPASS,
         CheckStatus::from_violations(bypass_required_violations),
     );
@@ -188,6 +204,7 @@ pub(crate) fn evaluate_checks(
 fn push_check_result(
     results: &mut Vec<CheckResult>,
     validation: &ValidationMetadata,
+    schema: &PluginSchema,
     rule_id: &'static str,
     status: CheckStatus,
 ) {
@@ -195,12 +212,19 @@ fn push_check_result(
     // exists and was intentionally bypassed with a reason.
     if let Some(disabled) = validation.disabled_rules.get(rule_id) {
         results.push(CheckResult {
+            plugin_id: schema.plugin_id.clone(),
+            plugin_name: schema.plugin_name.clone(),
             rule_id,
             status: CheckStatus::Disabled(disabled.reason.clone()),
         });
         return;
     }
-    results.push(CheckResult { rule_id, status });
+    results.push(CheckResult {
+        plugin_id: schema.plugin_id.clone(),
+        plugin_name: schema.plugin_name.clone(),
+        rule_id,
+        status,
+    });
 }
 
 fn nearly_equal(a: f64, b: f64) -> bool {
@@ -209,6 +233,8 @@ fn nearly_equal(a: f64, b: f64) -> bool {
 
 #[derive(Debug)]
 pub(crate) struct CheckResult {
+    pub(crate) plugin_id: String,
+    pub(crate) plugin_name: String,
     pub(crate) rule_id: &'static str,
     pub(crate) status: CheckStatus,
 }
@@ -233,6 +259,8 @@ impl CheckStatus {
 
 #[derive(Debug)]
 pub(crate) struct RuleViolation {
+    pub(crate) plugin_id: String,
+    pub(crate) plugin_name: String,
     pub(crate) location: PathBuf,
     pub(crate) rule_id: &'static str,
     pub(crate) message: String,
@@ -261,7 +289,11 @@ mod tests {
     use super::*;
 
     fn schema(params: Vec<ParameterSchema>) -> PluginSchema {
-        PluginSchema { params }
+        PluginSchema {
+            plugin_id: "com.example.test".to_string(),
+            plugin_name: "Test Plugin".to_string(),
+            params,
+        }
     }
 
     fn param(id: u32, flags: u32) -> ParameterSchema {

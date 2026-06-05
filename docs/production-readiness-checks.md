@@ -28,6 +28,7 @@ New checks must be treated as release-policy changes, not only code changes. Bef
 - Temporarily put a real template plugin into a violating state for each new or changed check. This is mandatory; unit tests alone are not enough.
 - Run `cargo xtask validate` against that real plugin and confirm the command fails with the expected rule ID and message.
 - Restore the real plugin and run `cargo xtask validate` again to confirm CI logs show the check as `pass`, `disabled`, or `skipped` as intended.
+- When changing product-level schema collection or product-level check behavior, temporarily expose multiple plugin products from one bundle and confirm the logs include each product.
 - Confirm the CI logs show every WRAC check status, not only the final pass/fail summary.
 
 ## Check List

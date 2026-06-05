@@ -16,6 +16,8 @@ use crate::targets::Platform;
 
 #[derive(Debug)]
 pub(crate) struct PluginSchema {
+    pub(crate) plugin_id: String,
+    pub(crate) plugin_name: String,
     pub(crate) params: Vec<ParameterSchema>,
 }
 
@@ -29,11 +31,11 @@ pub(crate) struct ParameterSchema {
     pub(crate) default_value: f64,
 }
 
-pub(crate) unsafe fn read_clap_schema(
+pub(crate) unsafe fn read_clap_schemas(
     ctx: &Context,
     profile: BuildProfile,
     clap_bundle: &Path,
-) -> Result<PluginSchema> {
+) -> Result<Vec<PluginSchema>> {
     // The checks need the host-visible schema, so query the built CLAP through its public
     // entry points instead of trusting source-side metadata that wrappers or adapters may alter.
     let library_path = clap_library_path(ctx, profile);
@@ -59,29 +61,14 @@ pub(crate) unsafe fn read_clap_schema(
         return Err("CLAP plugin factory is not available".into());
     }
 
-    let descriptor = unsafe { first_plugin_descriptor(factory) }?;
-    let plugin_id = unsafe { CStr::from_ptr(descriptor.id) };
     let create_plugin =
         unsafe { (*factory).create_plugin }.ok_or("CLAP factory has no create_plugin callback")?;
-    let host = validator_clap_host();
-    let plugin = unsafe { create_plugin(factory, &host, plugin_id.as_ptr()) };
-    if plugin.is_null() {
-        return Err(format!(
-            "CLAP factory failed to create plugin id={}",
-            plugin_id.to_string_lossy()
-        )
-        .into());
+    let count = unsafe { plugin_count(factory) }?;
+    let mut schemas = Vec::new();
+    for index in 0..count {
+        schemas.push(unsafe { read_plugin_schema(factory, create_plugin, index) }?);
     }
-    let _plugin_guard = ClapPluginGuard { plugin };
-
-    if let Some(init_plugin) = unsafe { (*plugin).init } {
-        if !unsafe { init_plugin(plugin) } {
-            return Err("CLAP plugin init failed".into());
-        }
-    }
-
-    let params = unsafe { read_params(plugin) }?;
-    Ok(PluginSchema { params })
+    Ok(schemas)
 }
 
 fn validator_clap_host() -> clap_host {
@@ -114,21 +101,78 @@ unsafe extern "C" fn validator_host_request_process(_host: *const clap_host) {}
 
 unsafe extern "C" fn validator_host_request_callback(_host: *const clap_host) {}
 
-unsafe fn first_plugin_descriptor(
-    factory: *const clap_plugin_factory,
-) -> Result<&'static clap_sys::plugin::clap_plugin_descriptor> {
+unsafe fn plugin_count(factory: *const clap_plugin_factory) -> Result<u32> {
     let count = unsafe { (*factory).get_plugin_count }
         .ok_or("CLAP factory has no get_plugin_count callback")?;
-    if unsafe { count(factory) } == 0 {
+    let count = unsafe { count(factory) };
+    if count == 0 {
         return Err("CLAP factory contains no plugins".into());
     }
+    Ok(count)
+}
+
+unsafe fn plugin_descriptor(
+    factory: *const clap_plugin_factory,
+    index: u32,
+) -> Result<*const clap_sys::plugin::clap_plugin_descriptor> {
     let get_descriptor = unsafe { (*factory).get_plugin_descriptor }
         .ok_or("CLAP factory has no get_plugin_descriptor callback")?;
-    let descriptor = unsafe { get_descriptor(factory, 0) };
+    let descriptor = unsafe { get_descriptor(factory, index) };
     if descriptor.is_null() {
-        return Err("CLAP factory returned a null descriptor".into());
+        return Err(format!("CLAP factory returned a null descriptor at index {index}").into());
     }
-    Ok(unsafe { &*descriptor })
+    Ok(descriptor)
+}
+
+unsafe fn read_plugin_schema(
+    factory: *const clap_plugin_factory,
+    create_plugin: unsafe extern "C" fn(
+        *const clap_plugin_factory,
+        *const clap_host,
+        *const c_char,
+    ) -> *const clap_sys::plugin::clap_plugin,
+    index: u32,
+) -> Result<PluginSchema> {
+    let descriptor = unsafe { plugin_descriptor(factory, index) }?;
+    let descriptor = unsafe { &*descriptor };
+    if descriptor.id.is_null() {
+        return Err(format!("CLAP descriptor has a null plugin id at index {index}").into());
+    }
+    let plugin_id = unsafe { CStr::from_ptr(descriptor.id) };
+    let plugin_name = if descriptor.name.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(descriptor.name) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let host = validator_clap_host();
+    let plugin = unsafe { create_plugin(factory, &host, plugin_id.as_ptr()) };
+    if plugin.is_null() {
+        return Err(format!(
+            "CLAP factory failed to create plugin id={}",
+            plugin_id.to_string_lossy()
+        )
+        .into());
+    }
+    let _plugin_guard = ClapPluginGuard { plugin };
+
+    if let Some(init_plugin) = unsafe { (*plugin).init } {
+        if !unsafe { init_plugin(plugin) } {
+            return Err(format!(
+                "CLAP plugin init failed for plugin id={}",
+                plugin_id.to_string_lossy()
+            )
+            .into());
+        }
+    }
+
+    let params = unsafe { read_params(plugin) }?;
+    Ok(PluginSchema {
+        plugin_id: plugin_id.to_string_lossy().into_owned(),
+        plugin_name,
+        params,
+    })
 }
 
 unsafe fn read_params(
