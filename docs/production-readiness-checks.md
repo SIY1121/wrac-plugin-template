@@ -21,15 +21,13 @@ Disable checks only for intentional product decisions. If the plugin is expected
 
 ## Adding Checks
 
-New checks must be treated as release-policy changes, not only code changes. Before opening a PR, the check author must:
+New checks are release-policy changes, not just code changes. Before opening a PR, the author must complete the following:
 
-- State the production-readiness expectation, reason, error condition, and fix in this document.
-- Add unit tests for pass, fail, disabled, skipped, and relevant edge cases.
-- Temporarily put a real template plugin into a violating state for each new or changed check. This is mandatory; unit tests alone are not enough.
-- Run `cargo xtask validate` against that real plugin and confirm the command fails with the expected rule ID and message.
-- Restore the real plugin and run `cargo xtask validate` again to confirm CI logs show the check as `pass`, `disabled`, or `skipped` as intended.
-- When changing product-level schema collection or product-level check behavior, temporarily expose multiple plugin products from one bundle and confirm the logs include each product.
-- Confirm the CI logs show every WRAC check status, not only the final pass/fail summary.
+- **Document:** Add the expectation, reason, error condition, and fix to this document's Check List.
+- **Unit Test:** Cover `pass`, `fail`, `disabled`, `skipped`, and edge cases.
+- **Manually Validate (Mandatory):** Unit tests alone are insufficient. You must:
+  - Intentionally break a real template plugin and verify `cargo xtask validate` fails with the expected rule ID and message.
+  - Restore the plugin and confirm the command now logs the check as `pass`, `disabled`, or `skipped`.
 
 ## Check List
 
