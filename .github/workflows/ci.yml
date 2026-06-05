@@ -81,7 +81,7 @@ jobs:
         run: cargo test --locked --workspace
 
   plugin-build:
-    name: CLAP/VST3/AU Validator (${{ matrix.os }})
+    name: VST3/AU/CLAP Validator (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
       CARGO_HTTP_MULTIPLEXING: false
@@ -153,7 +153,7 @@ jobs:
       - name: Build plugin and standalone artifacts
         run: cargo xtask build --release
 
-      - name: Run CLAP/VST3/AU validators
+      - name: Run VST3/AU/CLAP validators
         if: matrix.validate-targets != ''
         run: cargo xtask validate --release --target=${{ matrix.validate-targets }}
 
@@ -161,7 +161,7 @@ jobs:
         run: ${{ matrix.verify }}
 
   aax-validation:
-    name: AAX Validator (${{ matrix.os }})
+    name: AAX Validator
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
