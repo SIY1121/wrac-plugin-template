@@ -6,6 +6,10 @@ WRAC production-readiness checks are opinionated NovoNotes release-policy checks
 
 The command logs every check as `pass`, `fail`, `disabled`, or `skipped` so CI logs show which release-policy checks were evaluated.
 
+Source-level implementation review is a separate layer. For AI-assisted review,
+ask the reviewer to use the repository root [`styleguide.md`](../styleguide.md)
+as context.
+
 ## Disabling Checks
 
 Checks can be disabled by rule ID in the plugin crate manifest. Every disabled rule must include a non-empty `reason`.
