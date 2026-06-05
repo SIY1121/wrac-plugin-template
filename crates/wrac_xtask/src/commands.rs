@@ -925,7 +925,7 @@ fn print_outputs(ctx: &Context, profile: BuildProfile, targets: &[Target]) {
 
 fn macos_clap_info_plist(metadata: &PluginMetadata) -> String {
     let plugin_name = &metadata.bundle_name;
-    let plugin_id = &metadata.primary_plugin().plugin_id;
+    let plugin_id = &metadata.bundle_identity_plugin().plugin_id;
     let version = &metadata.version;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>

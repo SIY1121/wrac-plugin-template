@@ -34,7 +34,6 @@ project(clap_wrapper_builder)
 #                                           the wrapped static library. Default 1.
 #     CLAP_WRAPPER_BUILDER_PRODUCT_<N>_OUTPUT_NAME
 #                                           Product name used for AUv2 output.
-#                                           Product 0 defaults to OUTPUT_NAME.
 #     CLAP_WRAPPER_BUILDER_PRODUCT_<N>_PLUGIN_ID
 #                                           CLAP plugin ID used by standalone.
 #     CLAP_WRAPPER_BUILDER_PRODUCT_<N>_STANDALONE_NAME
@@ -151,8 +150,6 @@ function(clap_wrapper_builder_product_output_name INDEX OUT_VAR)
     clap_wrapper_builder_product_value(${INDEX} "OUTPUT_NAME" value)
     if(value)
         set(${OUT_VAR} "${value}" PARENT_SCOPE)
-    elseif(INDEX EQUAL 0)
-        set(${OUT_VAR} "${PLUGIN_NAME}" PARENT_SCOPE)
     else()
         message(FATAL_ERROR "CLAP_WRAPPER_BUILDER_PRODUCT_${INDEX}_OUTPUT_NAME must be specified")
     endif()
@@ -401,21 +398,21 @@ if(CLAP_WRAPPER_BUILDER_STAGE_DIR)
     endforeach()
 
     foreach(STANDALONE_TARGET IN LISTS STANDALONE_TARGETS)
-        get_target_property(STANDALONE_OUTPUT_NAME ${STANDALONE_TARGET} OUTPUT_NAME)
+        get_target_property(PRODUCT_STANDALONE_OUTPUT_NAME ${STANDALONE_TARGET} OUTPUT_NAME)
         if(APPLE)
             add_custom_command(TARGET ${STANDALONE_TARGET} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E rm -rf "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${STANDALONE_OUTPUT_NAME}.app"
-                COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:${STANDALONE_TARGET}>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${STANDALONE_OUTPUT_NAME}.app"
+                COMMAND ${CMAKE_COMMAND} -E rm -rf "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PRODUCT_STANDALONE_OUTPUT_NAME}.app"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:${STANDALONE_TARGET}>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PRODUCT_STANDALONE_OUTPUT_NAME}.app"
                 VERBATIM
             )
         elseif(WIN32)
             add_custom_command(TARGET ${STANDALONE_TARGET} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${STANDALONE_TARGET}>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${STANDALONE_OUTPUT_NAME}.exe"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${STANDALONE_TARGET}>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PRODUCT_STANDALONE_OUTPUT_NAME}.exe"
                 VERBATIM
             )
         else()
             add_custom_command(TARGET ${STANDALONE_TARGET} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${STANDALONE_TARGET}>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${STANDALONE_OUTPUT_NAME}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${STANDALONE_TARGET}>" "${CLAP_WRAPPER_BUILDER_STAGE_DIR}/${PRODUCT_STANDALONE_OUTPUT_NAME}"
                 VERBATIM
             )
         endif()

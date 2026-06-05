@@ -406,9 +406,9 @@ struct CheckSubject {
 
 impl CheckSubject {
     fn bundle(metadata: &PluginMetadata) -> Self {
-        let primary = metadata.primary_plugin();
+        let bundle_identity = metadata.bundle_identity_plugin();
         Self {
-            plugin_id: primary.plugin_id.clone(),
+            plugin_id: bundle_identity.plugin_id.clone(),
             plugin_name: metadata.bundle_name.clone(),
         }
     }

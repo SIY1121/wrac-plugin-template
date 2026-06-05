@@ -74,7 +74,7 @@ impl PluginMetadata {
         format!("{}.component", plugin.plugin_name)
     }
 
-    pub(crate) fn primary_plugin(&self) -> &PluginProductMetadata {
+    pub(crate) fn bundle_identity_plugin(&self) -> &PluginProductMetadata {
         // WRAC bundles may expose multiple plugin products from one binary, but wrapper
         // bundle-level metadata still needs one stable identity.
         self.plugins

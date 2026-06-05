@@ -40,7 +40,7 @@ impl Context {
         let target_dir = target_root
             .join(&config.target_namespace)
             .join(&package.artifact_namespace);
-        // CLAP_WRAPPER_DIR remains an escape hatch for testing SDK changes or a temporary external checkout.
+        // CLAP_WRAPPER_DIR lets wrapper developers point xtask at another clap_wrapper_builder checkout.
         let wrapper_dir = std::env::var_os("CLAP_WRAPPER_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| config.wrapper_dir.clone());
