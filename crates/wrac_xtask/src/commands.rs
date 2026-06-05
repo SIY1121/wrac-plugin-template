@@ -954,9 +954,7 @@ fn dsh_string(path: &Path) -> Result<String> {
 
 fn ensure_aax_validator_dsh(ctx: &Context) -> Result<PathBuf> {
     let root = aax_validator_dsh_root(ctx)?;
-    let dsh = root
-        .join("CommandLineTools")
-        .join(executable_name("dsh", ctx.platform));
+    let dsh = aax_validator_dsh_executable(&root, ctx.platform)?;
     ensure_exists(&dsh, "AAX validator DSH")?;
     if ctx.platform == Platform::Macos {
         // Avid validator archives downloaded through a browser may carry quarantine
@@ -982,7 +980,7 @@ fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
     }
 
     let extracted_root = ctx.target_dir.join("tools").join("aax-validator-dsh");
-    if extracted_root.join("CommandLineTools").join("dsh").exists() {
+    if aax_validator_dsh_executable(&extracted_root, ctx.platform).is_ok() {
         return Ok(extracted_root);
     }
 
@@ -992,7 +990,7 @@ fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
     remove_if_exists(&extracted_root)?;
     fs::create_dir_all(&extracted_root)?;
     run(Command::new("tar")
-        .args(["-xzf"])
+        .arg("-xf")
         .arg(&archive)
         .arg("--strip-components=1")
         .arg("-C")
@@ -1018,7 +1016,33 @@ fn aax_validator_dsh_archive() -> Result<PathBuf> {
             return Ok(archive);
         }
     }
-    Err("AAX validator/DSH not found. Set AAX_VALIDATOR_DSH_ROOT to the extracted validator directory or AAX_VALIDATOR_DSH_ARCHIVE to the downloaded .tar.gz.".into())
+    Err("AAX validator/DSH not found. Set AAX_VALIDATOR_DSH_ROOT to the extracted validator directory or AAX_VALIDATOR_DSH_ARCHIVE to the downloaded archive.".into())
+}
+
+fn aax_validator_dsh_executable(root: &Path, platform: Platform) -> Result<PathBuf> {
+    let executable = executable_name("dsh", platform);
+    for candidate in [
+        // Windows validator archives place the runnable validator dish and helper
+        // executables under AAXValidatorResources/Tools. Prefer that directory so DSH's
+        // relative resource lookup matches the layout shipped by Avid.
+        root.join("AAXValidatorResources")
+            .join("Tools")
+            .join(&executable),
+        // macOS archives expose CommandLineTools at the package root.
+        root.join("CommandLineTools").join(&executable),
+        // Some Windows archives also include a top-level dsh.exe. Keep it as a fallback
+        // for extracted roots supplied by users, but do not rely on it in CI.
+        root.join(&executable),
+    ] {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "AAX validator DSH executable not found under {}",
+        root.display()
+    )
+    .into())
 }
 
 fn ensure_clap_validator(ctx: &Context) -> Result<PathBuf> {
