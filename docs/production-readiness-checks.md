@@ -4,6 +4,8 @@
 
 WRAC production-readiness checks are opinionated NovoNotes release-policy checks for commercial plugins, not format-spec validators. They can require a low-cost convention when NovoNotes expects it to reduce compatibility risk, support burden, or product inconsistency, even without a known format-spec violation or confirmed host-specific bug.
 
+The command logs every check as `pass`, `fail`, `disabled`, or `skipped` so CI logs show which release-policy checks were evaluated.
+
 ## Disabling Checks
 
 Checks can be disabled by rule ID in the plugin crate manifest. Every disabled rule must include a non-empty `reason`.
@@ -16,6 +18,17 @@ reason = "This product does not support Fender Studio Pro generic editor workflo
 Unknown rule IDs and empty reasons are errors.
 
 Disable checks only for intentional product decisions. If the plugin is expected to satisfy the release policy behind a check, fix the plugin instead.
+
+## Adding Checks
+
+New checks must be treated as release-policy changes, not only code changes. Before opening a PR, the check author must:
+
+- State the production-readiness expectation, reason, error condition, and fix in this document.
+- Add unit tests for pass, fail, disabled, skipped, and relevant edge cases.
+- Temporarily put a real template plugin into a violating state for each new or changed check. This is mandatory; unit tests alone are not enough.
+- Run `cargo xtask validate` against that real plugin and confirm the command fails with the expected rule ID and message.
+- Restore the real plugin and run `cargo xtask validate` again to confirm CI logs show the check as `pass`, `disabled`, or `skipped` as intended.
+- Confirm the CI logs show every WRAC check status, not only the final pass/fail summary.
 
 ## Check List
 

@@ -40,12 +40,14 @@ pub(crate) fn validate_wrac_rules(
 
     let clap = ctx.clap_bundle(profile);
     let schema = unsafe { read_clap_schema(ctx, profile, &clap)? };
-    let violations = evaluate_rules(
+    let results = evaluate_checks(
         &schema,
         targets,
         &ctx.metadata.validation,
         &ctx.plugin_manifest(),
     );
+    print_check_results(&results);
+    let violations = failed_violations(&results);
 
     if violations.is_empty() {
         println!("WRAC production-readiness checks: passed");
@@ -78,13 +80,12 @@ fn validate_disabled_rules(validation: &ValidationMetadata) -> Result<()> {
     Ok(())
 }
 
-fn evaluate_rules(
+fn evaluate_checks(
     schema: &PluginSchema,
     targets: &[ValidateTarget],
     validation: &ValidationMetadata,
     location: &Path,
-) -> Vec<RuleViolation> {
-    let mut violations = Vec::new();
+) -> Vec<CheckResult> {
     let hidden_or_readonly = |param: &&ParameterSchema| {
         param.flags.contains(CLAP_PARAM_IS_HIDDEN) || param.flags.contains(CLAP_PARAM_IS_READONLY)
     };
@@ -99,53 +100,80 @@ fn evaluate_rules(
         .filter(|param| param.flags.contains(CLAP_PARAM_IS_BYPASS))
         .collect::<Vec<_>>();
 
+    let mut results = Vec::new();
+
     if targets
         .iter()
         .any(|target| matches!(target, Target::Clap | Target::Vst3))
-        && visible_non_bypass_count == 1
     {
-        push_violation(
-            &mut violations,
+        let violations = if visible_non_bypass_count == 1 {
+            vec![RuleViolation {
+                location: location.to_path_buf(),
+                rule_id: RULE_FENDER_SINGLE_KNOB,
+                message: format!(
+                    "Fender Studio Pro generic editors fail to render knobs when exactly one visible non-bypass parameter is exposed. visible_non_bypass_parameter_count={visible_non_bypass_count}"
+                ),
+                fix: "Expose zero or at least two visible non-bypass parameters, or disable this rule with a documented reason.",
+            }]
+        } else {
+            Vec::new()
+        };
+        push_check_result(
+            &mut results,
             validation,
-            location,
             RULE_FENDER_SINGLE_KNOB,
-            format!(
-                "Fender Studio Pro generic editors fail to render knobs when exactly one visible non-bypass parameter is exposed. visible_non_bypass_parameter_count={visible_non_bypass_count}"
-            ),
-            "Expose zero or at least two visible non-bypass parameters, or disable this rule with a documented reason.",
+            CheckStatus::from_violations(violations),
+        );
+    } else {
+        push_check_result(
+            &mut results,
+            validation,
+            RULE_FENDER_SINGLE_KNOB,
+            CheckStatus::Skipped("CLAP or VST3 validation was not requested."),
         );
     }
 
     if targets.contains(&Target::Vst3) {
+        let mut violations = Vec::new();
         for (index, param) in schema.params.iter().enumerate() {
             if param.id != index as u32 {
-                push_violation(
-                    &mut violations,
-                    validation,
-                    location,
-                    RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
-                    format!(
+                violations.push(RuleViolation {
+                    location: location.to_path_buf(),
+                    rule_id: RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
+                    message: format!(
                         "LUNA 2.0.3.4381 VST3 automation writes fail when ParamID differs from parameter index. index={index} id={} name=\"{}\"",
                         param.id, param.name
                     ),
-                    "Keep public VST3 parameter IDs equal to their parameter-list indices.",
-                );
+                    fix: "Keep public VST3 parameter IDs equal to their parameter-list indices.",
+                });
             }
         }
+        push_check_result(
+            &mut results,
+            validation,
+            RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
+            CheckStatus::from_violations(violations),
+        );
+    } else {
+        push_check_result(
+            &mut results,
+            validation,
+            RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
+            CheckStatus::Skipped("VST3 validation was not requested."),
+        );
     }
 
+    let mut bypass_shape_violations = Vec::new();
     if bypass_params.len() > 1 {
-        push_violation(
-            &mut violations,
-            validation,
-            location,
-            RULE_BYPASS_PARAM_SHAPE,
-            format!(
+        bypass_shape_violations.push(RuleViolation {
+            location: location.to_path_buf(),
+            rule_id: RULE_BYPASS_PARAM_SHAPE,
+            message: format!(
                 "Only one bypass parameter may be exposed. bypass_parameter_count={}",
                 bypass_params.len()
             ),
-            "Expose a single host bypass parameter.",
-        );
+            fix: "Expose a single host bypass parameter.",
+        });
     }
     for param in bypass_params {
         let stepped = param.flags.contains(CLAP_PARAM_IS_STEPPED);
@@ -158,59 +186,124 @@ fn evaluate_rules(
             || !nearly_equal(param.max_value, 1.0)
             || !default_is_boolean
         {
-            push_violation(
-                &mut violations,
-                validation,
-                location,
-                RULE_BYPASS_PARAM_SHAPE,
-                format!(
+            bypass_shape_violations.push(RuleViolation {
+                location: location.to_path_buf(),
+                rule_id: RULE_BYPASS_PARAM_SHAPE,
+                message: format!(
                     "Bypass parameter must be a stepped enum with range 0..1 and a boolean default. id={} name=\"{}\" stepped={stepped} enum={enum_flag} min={} max={} default={}",
                     param.id, param.name, param.min_value, param.max_value, param.default_value
                 ),
-                "Set bypass flags to stepped + enum + bypass, min=0, max=1, and default=0 or 1.",
-            );
+                fix: "Set bypass flags to stepped + enum + bypass, min=0, max=1, and default=0 or 1.",
+            });
         }
     }
+    push_check_result(
+        &mut results,
+        validation,
+        RULE_BYPASS_PARAM_SHAPE,
+        CheckStatus::from_violations(bypass_shape_violations),
+    );
 
-    if schema
+    let bypass_required_violations = if schema
         .params
         .iter()
         .all(|param| !param.flags.contains(CLAP_PARAM_IS_BYPASS))
     {
-        push_violation(
-            &mut violations,
-            validation,
-            location,
-            RULE_PLUGIN_REQUIRES_BYPASS,
-            "Production plugins should expose a host bypass parameter.".to_string(),
-            "Add one bypass parameter, or disable this rule with a documented reason.",
-        );
-    }
+        vec![RuleViolation {
+            location: location.to_path_buf(),
+            rule_id: RULE_PLUGIN_REQUIRES_BYPASS,
+            message: "Production plugins should expose a host bypass parameter.".to_string(),
+            fix: "Add one bypass parameter, or disable this rule with a documented reason.",
+        }]
+    } else {
+        Vec::new()
+    };
+    push_check_result(
+        &mut results,
+        validation,
+        RULE_PLUGIN_REQUIRES_BYPASS,
+        CheckStatus::from_violations(bypass_required_violations),
+    );
 
-    violations
+    results
 }
 
-fn push_violation(
-    violations: &mut Vec<RuleViolation>,
+fn push_check_result(
+    results: &mut Vec<CheckResult>,
     validation: &ValidationMetadata,
-    location: &Path,
     rule_id: &'static str,
-    message: impl Into<String>,
-    fix: &'static str,
+    status: CheckStatus,
 ) {
-    if validation.disabled_rules.contains_key(rule_id) {
+    if let Some(disabled) = validation.disabled_rules.get(rule_id) {
+        results.push(CheckResult {
+            rule_id,
+            status: CheckStatus::Disabled(disabled.reason.clone()),
+        });
         return;
     }
-    violations.push(RuleViolation {
-        location: location.to_path_buf(),
-        rule_id,
-        message: message.into(),
-        fix,
-    });
+    results.push(CheckResult { rule_id, status });
+}
+
+fn print_check_results(results: &[CheckResult]) {
+    println!("WRAC production-readiness checks:");
+    for result in results {
+        match &result.status {
+            CheckStatus::Passed => println!("  pass     {}", result.rule_id),
+            CheckStatus::Skipped(reason) => {
+                println!("  skipped  {}", result.rule_id);
+                println!("           reason: {reason}");
+            }
+            CheckStatus::Disabled(reason) => {
+                println!("  disabled {}", result.rule_id);
+                println!("           reason: {reason}");
+            }
+            CheckStatus::Failed(violations) => {
+                println!("  fail     {}", result.rule_id);
+                for violation in violations {
+                    println!("           {}", violation.message);
+                    println!("           Fix: {}", violation.fix);
+                }
+            }
+        }
+    }
+}
+
+fn failed_violations(results: &[CheckResult]) -> Vec<&RuleViolation> {
+    results
+        .iter()
+        .flat_map(|result| match &result.status {
+            CheckStatus::Failed(violations) => violations.iter().collect::<Vec<_>>(),
+            CheckStatus::Passed | CheckStatus::Skipped(_) | CheckStatus::Disabled(_) => Vec::new(),
+        })
+        .collect()
 }
 
 fn nearly_equal(a: f64, b: f64) -> bool {
     (a - b).abs() < f64::EPSILON
+}
+
+#[derive(Debug)]
+struct CheckResult {
+    rule_id: &'static str,
+    status: CheckStatus,
+}
+
+#[derive(Debug)]
+enum CheckStatus {
+    Passed,
+    Failed(Vec<RuleViolation>),
+    Skipped(&'static str),
+    Disabled(String),
+}
+
+impl CheckStatus {
+    fn from_violations(violations: Vec<RuleViolation>) -> Self {
+        if violations.is_empty() {
+            Self::Passed
+        } else {
+            Self::Failed(violations)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -454,41 +547,98 @@ mod tests {
         ValidationMetadata::default()
     }
 
+    fn status_for<'a>(results: &'a [CheckResult], rule_id: &str) -> &'a CheckStatus {
+        &results
+            .iter()
+            .find(|result| result.rule_id == rule_id)
+            .expect("rule result should exist")
+            .status
+    }
+
+    fn rule_failed(results: &[CheckResult], rule_id: &str) -> bool {
+        matches!(status_for(results, rule_id), CheckStatus::Failed(_))
+    }
+
+    fn valid_bypass_param(id: u32) -> ParameterSchema {
+        param(
+            id,
+            CLAP_PARAM_IS_BYPASS | CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM,
+        )
+    }
+
     #[test]
     fn single_visible_non_bypass_parameter_fails_for_clap_and_vst3() {
-        let violations = evaluate_rules(
+        let results = evaluate_checks(
             &schema(vec![param(0, 0), param(1, CLAP_PARAM_IS_BYPASS)]),
             &[ValidateTarget::Clap],
             &no_disabled_rules(),
             Path::new("Cargo.toml"),
         );
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.rule_id == RULE_FENDER_SINGLE_KNOB)
+        assert!(rule_failed(&results, RULE_FENDER_SINGLE_KNOB));
+    }
+
+    #[test]
+    fn single_visible_non_bypass_parameter_is_skipped_for_au_only() {
+        let results = evaluate_checks(
+            &schema(vec![param(0, 0), valid_bypass_param(1)]),
+            &[ValidateTarget::Au],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
         );
+        assert!(matches!(
+            status_for(&results, RULE_FENDER_SINGLE_KNOB),
+            CheckStatus::Skipped(_)
+        ));
     }
 
     #[test]
     fn zero_visible_non_bypass_parameters_are_allowed() {
-        let violations = evaluate_rules(
-            &schema(vec![param(
-                0,
-                CLAP_PARAM_IS_BYPASS | CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM,
-            )]),
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0)]),
             &[ValidateTarget::Clap],
             &no_disabled_rules(),
             Path::new("Cargo.toml"),
         );
-        assert!(
-            !violations
-                .iter()
-                .any(|violation| violation.rule_id == RULE_FENDER_SINGLE_KNOB)
-        );
+        assert!(matches!(
+            status_for(&results, RULE_FENDER_SINGLE_KNOB),
+            CheckStatus::Passed
+        ));
     }
 
     #[test]
-    fn disabled_rules_suppress_violations() {
+    fn two_visible_non_bypass_parameters_are_allowed() {
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0), param(1, 0), param(2, 0)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(matches!(
+            status_for(&results, RULE_FENDER_SINGLE_KNOB),
+            CheckStatus::Passed
+        ));
+    }
+
+    #[test]
+    fn hidden_readonly_and_bypass_parameters_do_not_count_as_visible_knobs() {
+        let results = evaluate_checks(
+            &schema(vec![
+                valid_bypass_param(0),
+                param(1, CLAP_PARAM_IS_HIDDEN),
+                param(2, CLAP_PARAM_IS_READONLY),
+            ]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(matches!(
+            status_for(&results, RULE_FENDER_SINGLE_KNOB),
+            CheckStatus::Passed
+        ));
+    }
+
+    #[test]
+    fn disabled_rules_are_reported() {
         let mut disabled_rules = HashMap::new();
         disabled_rules.insert(
             RULE_FENDER_SINGLE_KNOB.to_string(),
@@ -497,61 +647,163 @@ mod tests {
             },
         );
         let validation = ValidationMetadata { disabled_rules };
-        let violations = evaluate_rules(
+        let results = evaluate_checks(
             &schema(vec![param(0, 0), param(1, CLAP_PARAM_IS_BYPASS)]),
             &[ValidateTarget::Clap],
             &validation,
             Path::new("Cargo.toml"),
         );
-        assert!(
-            !violations
-                .iter()
-                .any(|violation| violation.rule_id == RULE_FENDER_SINGLE_KNOB)
-        );
+        assert!(matches!(
+            status_for(&results, RULE_FENDER_SINGLE_KNOB),
+            CheckStatus::Disabled(reason) if reason == "not a supported host workflow"
+        ));
     }
 
     #[test]
     fn vst3_param_id_must_match_index() {
-        let violations = evaluate_rules(
+        let results = evaluate_checks(
             &schema(vec![param(1, 0), param(2, 0)]),
             &[ValidateTarget::Vst3],
             &no_disabled_rules(),
             Path::new("Cargo.toml"),
         );
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.rule_id == RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX)
-        );
+        assert!(rule_failed(&results, RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX));
     }
 
     #[test]
-    fn bypass_shape_requires_stepped_enum_boolean_range() {
-        let violations = evaluate_rules(
-            &schema(vec![param(0, CLAP_PARAM_IS_BYPASS)]),
+    fn vst3_only_rule_is_skipped_without_vst3_target() {
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0)]),
             &[ValidateTarget::Clap],
             &no_disabled_rules(),
             Path::new("Cargo.toml"),
         );
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.rule_id == RULE_BYPASS_PARAM_SHAPE)
+        assert!(matches!(
+            status_for(&results, RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX),
+            CheckStatus::Skipped(_)
+        ));
+    }
+
+    #[test]
+    fn vst3_param_ids_matching_indices_pass() {
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0), param(1, 0)]),
+            &[ValidateTarget::Vst3],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
         );
+        assert!(matches!(
+            status_for(&results, RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX),
+            CheckStatus::Passed
+        ));
+    }
+
+    #[test]
+    fn bypass_shape_requires_stepped_flag() {
+        let results = evaluate_checks(
+            &schema(vec![param(0, CLAP_PARAM_IS_BYPASS | CLAP_PARAM_IS_ENUM)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(rule_failed(&results, RULE_BYPASS_PARAM_SHAPE));
+    }
+
+    #[test]
+    fn bypass_shape_requires_enum_flag() {
+        let results = evaluate_checks(
+            &schema(vec![param(0, CLAP_PARAM_IS_BYPASS | CLAP_PARAM_IS_STEPPED)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(rule_failed(&results, RULE_BYPASS_PARAM_SHAPE));
+    }
+
+    #[test]
+    fn bypass_shape_requires_boolean_range() {
+        let mut bypass = valid_bypass_param(0);
+        bypass.max_value = 2.0;
+        let results = evaluate_checks(
+            &schema(vec![bypass]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(rule_failed(&results, RULE_BYPASS_PARAM_SHAPE));
+    }
+
+    #[test]
+    fn bypass_shape_requires_boolean_default() {
+        let mut bypass = valid_bypass_param(0);
+        bypass.default_value = 0.5;
+        let results = evaluate_checks(
+            &schema(vec![bypass]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(rule_failed(&results, RULE_BYPASS_PARAM_SHAPE));
+    }
+
+    #[test]
+    fn bypass_shape_allows_one_valid_bypass_parameter() {
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(matches!(
+            status_for(&results, RULE_BYPASS_PARAM_SHAPE),
+            CheckStatus::Passed
+        ));
+    }
+
+    #[test]
+    fn bypass_shape_rejects_multiple_bypass_parameters() {
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0), valid_bypass_param(1)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(rule_failed(&results, RULE_BYPASS_PARAM_SHAPE));
     }
 
     #[test]
     fn plugin_requires_bypass() {
-        let violations = evaluate_rules(
+        let results = evaluate_checks(
             &schema(Vec::new()),
             &[ValidateTarget::Clap],
             &no_disabled_rules(),
             Path::new("Cargo.toml"),
         );
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.rule_id == RULE_PLUGIN_REQUIRES_BYPASS)
+        assert!(rule_failed(&results, RULE_PLUGIN_REQUIRES_BYPASS));
+    }
+
+    #[test]
+    fn plugin_requires_bypass_when_only_non_bypass_parameters_exist() {
+        let results = evaluate_checks(
+            &schema(vec![param(0, 0), param(1, 0)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
         );
+        assert!(rule_failed(&results, RULE_PLUGIN_REQUIRES_BYPASS));
+    }
+
+    #[test]
+    fn plugin_requires_bypass_passes_with_valid_bypass_parameter() {
+        let results = evaluate_checks(
+            &schema(vec![valid_bypass_param(0)]),
+            &[ValidateTarget::Clap],
+            &no_disabled_rules(),
+            Path::new("Cargo.toml"),
+        );
+        assert!(matches!(
+            status_for(&results, RULE_PLUGIN_REQUIRES_BYPASS),
+            CheckStatus::Passed
+        ));
     }
 }
