@@ -22,6 +22,10 @@ are too contextual for a low-noise validator.
 
 - Keep `plugins/*/src-plugin/Cargo.toml` `[package.metadata.wrac]` as the source
   of truth for product identity.
+- Product repositories should not ship template placeholders such as
+  `Your Company`, `com.your-company`, `WRAC Gain`, `wrac_gain_plugin`, or the
+  template repository URL unless the repository is intentionally the template
+  itself.
 - Do not hard-code plugin IDs, names, company names, versions, or AUv2 codes in
   Rust, TypeScript, CMake, or generated bundle metadata when they can come from
   WRAC metadata.
@@ -40,6 +44,9 @@ are too contextual for a low-noise validator.
   `param_count`, `param_info`, `param_value`, `apply_param_value`,
   `value_to_text`, `text_to_value`, shared state, save/restore, GUI payloads,
   frontend constants, and UI routing.
+- Prefer generated or environment-injected descriptor metadata such as
+  `env!("WRAC_PLUGIN_0_ID")` over hand-maintained Rust constants when the value
+  already exists in `package.metadata.wrac`.
 - GUI-originated parameter edits must update the product source of truth and send
   host automation notifications in a begin/update/end gesture.
 - Bypass should be a single host-visible boolean-shaped bypass parameter unless
@@ -99,6 +106,10 @@ are too contextual for a low-noise validator.
 
 - Production-readiness checks should fail deterministically when a manifest or
   built artifact violates a low-noise release policy.
+- Source-level checks are appropriate for template placeholders, cross-file
+  command/payload consistency, realtime code contracts, state migration intent,
+  and other review findings that are valuable but too contextual for low-noise
+  artifact validation.
 - Unit tests should cover pure logic such as parameter conversion, state
   migration, layout resolution, and GUI payload builders.
 - Debug assertions should catch impossible states and realtime violations during
