@@ -7,9 +7,7 @@ use wrac_clap_adapter::{
 use crate::state::SharedState;
 
 // Parameter IDs are stable values used by the host for automation and project saving.
-// Never change them after publishing. This starter template keeps initial IDs equal
-// to parameter-list indices because LUNA 2.0.3.4381 VST3 automation writes fail
-// when the automated parameter's ParamID differs from its index.
+// Never change them after publishing. Keep initial public IDs dense and index-aligned.
 pub(crate) const PARAM_BYPASS_ID: u32 = 0;
 pub(crate) const PARAM_GAIN_ID: u32 = 1;
 
@@ -128,8 +126,7 @@ pub(crate) fn gain_param_info() -> ParamInfo {
 }
 
 pub(crate) fn bypass_param_info() -> ParamInfo {
-    // Some hosts suppress all parameters in their generic editor if there is no bypass
-    // parameter. Include a working bypass even in the template.
+    // A real host bypass parameter is part of the template's production-ready shape.
     ParamInfo {
         id: PARAM_BYPASS_ID,
         name: "Bypass",
@@ -140,8 +137,8 @@ pub(crate) fn bypass_param_info() -> ParamInfo {
         flags: ParamFlags {
             is_automatable: true,
             is_stepped: true,
-            // Also set the enum flag for stepped choice params. The wrapper converts
-            // this to the host's native list metadata, which some generic editors rely on.
+            // Keep this as an enum as well as stepped so wrappers can expose native choice
+            // metadata instead of only a numeric toggle.
             is_enum: true,
             is_bypass: true,
             ..ParamFlags::default()
