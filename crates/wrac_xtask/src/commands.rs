@@ -821,6 +821,7 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
     // `saveresult` output if DSH exits early or changes a result reference.
     remove_if_exists(&results_dir)?;
     fs::create_dir_all(&results_dir)?;
+    let aax = stage_aax_for_validator(&results_dir, aax)?;
 
     println!("Running AAX validator/DSH for: {}", aax.display());
     println!(
@@ -855,7 +856,7 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
             writeln!(
                 stdin,
                 "runtest {{test: {test_id}, path: {}, stringformat: json, detail: min}}",
-                dsh_string(aax)?
+                dsh_string(&aax)?
             )?;
             writeln!(
                 stdin,
@@ -878,6 +879,7 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
 
     let status = output.status;
     if !status.success() {
+        print_aax_validator_output(&output.stdout, &output.stderr);
         return Err(format!(
             "AAX validator/DSH failed with status {status}; see {}",
             stdout_path.display()
@@ -888,6 +890,9 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
     let mut failed = Vec::new();
     for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
         let result_path = aax_validator_result_path(&results_dir, index, test_id);
+        if !result_path.exists() {
+            print_aax_validator_output(&output.stdout, &output.stderr);
+        }
         let status = aax_validator_result_status(&result_path)?;
         if status == "E_COMPLETED_PASS" {
             println!("AAX validator PASS: {test_id}");
@@ -907,6 +912,32 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
         .into());
     }
     Ok(())
+}
+
+fn stage_aax_for_validator(results_dir: &Path, aax: &Path) -> Result<PathBuf> {
+    let staged_aax = results_dir.join("input").join("plugin.aaxplugin");
+    // DSH documents path handling problems around spaces. The template bundle name is
+    // intentionally human-readable, so validation uses a temporary no-space copy rather
+    // than constraining product-facing bundle names.
+    remove_if_exists(&staged_aax)?;
+    if let Some(parent) = staged_aax.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    copy_path(aax, &staged_aax)?;
+    Ok(staged_aax)
+}
+
+fn print_aax_validator_output(stdout: &[u8], stderr: &[u8]) {
+    let stdout = String::from_utf8_lossy(stdout);
+    if !stdout.trim().is_empty() {
+        println!("========== AAX validator DSH stdout ==========");
+        println!("{stdout}");
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    if !stderr.trim().is_empty() {
+        println!("========== AAX validator DSH stderr ==========");
+        println!("{stderr}");
+    }
 }
 
 fn aax_validator_result_path(results_dir: &Path, index: usize, test_id: &str) -> PathBuf {
