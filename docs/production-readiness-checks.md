@@ -1,5 +1,7 @@
 # Production-Readiness Checks
 
+> 日本語版: [production-readiness-checks-ja.md](production-readiness-checks-ja.md)
+
 `cargo xtask validate` builds the requested plugin formats, runs WRAC production-readiness checks, and then runs external format validators such as clap-validator, Steinberg's VST3 validator, and auval. WRAC check violations are errors and return a non-zero exit code.
 
 WRAC production-readiness checks are opinionated NovoNotes release-policy checks for commercial plugins, not format-spec validators. Keep this check set small. Do not add rules for problems that have not actually happened. A production-readiness rule is appropriate only when it prevents a real release, QA, host-compatibility, or support problem that has already been observed.

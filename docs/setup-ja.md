@@ -96,7 +96,7 @@ rg を用いる例:
 rg --hidden "wrac_gain_plugin|WRAC Gain|com\.your-company\.wrac-gain|wrac-gain-plugin" \
     --glob '!node_modules' --glob '!dist' --glob '!*.lock' \
     --glob '!package-lock.json' --glob '!*.zip' \
-    --glob '!docs/setup.md' --glob '!docs/setup_JA.md'
+    --glob '!docs/setup.md' --glob '!docs/setup-ja.md'
 
 rg --hidden 'repository = "https://github.com/novonotes/wrac-plugin-template"' --glob 'Cargo.toml'
 ```
