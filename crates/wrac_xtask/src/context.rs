@@ -104,6 +104,11 @@ impl Context {
             .join(self.metadata.vst3_bundle_name())
     }
 
+    pub(crate) fn aax_bundle(&self, profile: BuildProfile) -> PathBuf {
+        self.plugins_dir(profile)
+            .join(self.metadata.aax_bundle_name())
+    }
+
     pub(crate) fn au_bundles(&self, profile: BuildProfile) -> Vec<PathBuf> {
         self.metadata
             .plugins
