@@ -2,7 +2,9 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -49,6 +51,7 @@ const AAX_VALIDATOR_SKIPPED_TESTS: &[(&str, &str)] = &[
         "requires page-table XML resources, which this template does not generate",
     ),
 ];
+const AAX_VALIDATOR_DSH_TIMEOUT_SECS: u64 = 15 * 60;
 
 pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
     let profile = BuildProfile::from_release(args.release);
@@ -846,28 +849,34 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
             .stdin
             .take()
             .ok_or("failed to open DSH stdin for AAX validation")?;
-        writeln!(stdin, "load_dish aaxval")?;
+        write_dsh_command(&mut stdin, ctx.platform, "load_dish aaxval")?;
         for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
             let result_ref = format!("r{}", index + 1);
             let result_path = aax_validator_result_path(&results_dir, index, test_id);
             // The aaxval dish has no documented per-test exclude list for `runtests`.
             // Running explicit `runtest` commands keeps the CI contract stable as
             // Avid updates collections, while still using DSH's own JSON result writer.
-            writeln!(
-                stdin,
-                "runtest {{test: {test_id}, path: {}, stringformat: json, detail: min}}",
-                dsh_string(&aax)?
+            write_dsh_command(
+                &mut stdin,
+                ctx.platform,
+                format!(
+                    "runtest {{test: {test_id}, path: {}, stringformat: json, detail: min}}",
+                    dsh_string(&aax)?
+                ),
             )?;
-            writeln!(
-                stdin,
-                "saveresult {{result_ref: {result_ref}, result_path: {}, stringformat: json}}",
-                dsh_string(&result_path)?
+            write_dsh_command(
+                &mut stdin,
+                ctx.platform,
+                format!(
+                    "saveresult {{result_ref: {result_ref}, result_path: {}, stringformat: json}}",
+                    dsh_string(&result_path)?
+                ),
             )?;
         }
-        writeln!(stdin, "quit")?;
+        write_dsh_command(&mut stdin, ctx.platform, "quit")?;
     }
 
-    let output = child.wait_with_output()?;
+    let output = wait_for_aax_validator_dsh(child, aax_validator_dsh_timeout()?)?;
     let stdout_path = results_dir.join("dsh-stdout.log");
     let stderr_path = results_dir.join("dsh-stderr.log");
     fs::write(&stdout_path, &output.stdout)?;
@@ -912,6 +921,55 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
         .into());
     }
     Ok(())
+}
+
+fn write_dsh_command(
+    stdin: &mut impl Write,
+    platform: Platform,
+    command: impl AsRef<str>,
+) -> Result<()> {
+    let command = command.as_ref();
+    if platform == Platform::Windows {
+        // Windows DSH is a native console executable. CRLF avoids leaving its stdin
+        // parser waiting for a line ending that Git Bash/Rust would otherwise not send.
+        write!(stdin, "{command}\r\n")?;
+    } else {
+        writeln!(stdin, "{command}")?;
+    }
+    Ok(())
+}
+
+fn wait_for_aax_validator_dsh(mut child: Child, timeout: Duration) -> Result<Output> {
+    let started_at = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if started_at.elapsed() >= timeout {
+            child.kill()?;
+            let output = child.wait_with_output()?;
+            print_aax_validator_output(&output.stdout, &output.stderr);
+            return Err(format!(
+                "AAX validator/DSH timed out after {} seconds",
+                timeout.as_secs()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+fn aax_validator_dsh_timeout() -> Result<Duration> {
+    let seconds = match env::var("AAX_VALIDATOR_DSH_TIMEOUT_SECS") {
+        Ok(value) => value.parse::<u64>().map_err(|err| {
+            format!("failed to parse AAX_VALIDATOR_DSH_TIMEOUT_SECS={value}: {err}")
+        })?,
+        Err(env::VarError::NotPresent) => AAX_VALIDATOR_DSH_TIMEOUT_SECS,
+        Err(err) => {
+            return Err(format!("failed to read AAX_VALIDATOR_DSH_TIMEOUT_SECS: {err}").into());
+        }
+    };
+    Ok(Duration::from_secs(seconds))
 }
 
 fn stage_aax_for_validator(results_dir: &Path, aax: &Path) -> Result<PathBuf> {
