@@ -10,6 +10,8 @@ Source-level implementation review is a separate layer. For AI-assisted review,
 ask the reviewer to use the repository root [`styleguide.md`](../styleguide.md)
 as context.
 
+Some source-level checks are still deterministic enough to run as production-readiness checks. These checks cover template placeholders, metadata injection paths, and literal frontend/native command names. More contextual source concerns, such as realtime lock usage or state migration quality, remain review checklist items.
+
 ## Disabling Checks
 
 Checks can be disabled by rule ID in the plugin crate manifest. Every disabled rule must include a non-empty `reason`.
@@ -154,6 +156,56 @@ New checks are release-policy changes, not just code changes. Before opening a P
 
 **Fix:** Declare descriptor features that match the plugin's actual ports and capabilities.
 
+### `gui-artifact-shape`
+
+**Expectation:** Products with `src-gui` expose a GUI extension and have built frontend output available when validation runs.
+
+**Reason:** Release builds embed frontend assets into the plugin binary. A product can pass format validation while still shipping without usable GUI assets if the GUI build or GUI extension path regresses.
+
+**Error conditions:**
+
+- The plugin source has `src-gui`, but the built plugin does not expose the CLAP GUI extension.
+- `src-gui/dist/index.html` is missing after `cargo xtask validate` builds the GUI.
+
+**Fix:** Build the frontend through `cargo xtask validate/build` before compiling the plugin, expose the GUI extension, or disable this rule with a documented reason for headless products.
+
+### `template-placeholders-renamed`
+
+**Expectation:** Product repositories replace template identity placeholders before shipping.
+
+**Reason:** Placeholder names and IDs can leak into host scan caches, plugin menus, AU registration, logs, and support diagnostics. This rule is skipped in the template repository itself.
+
+**Error conditions:**
+
+- Manifest metadata still contains template placeholders such as `Your Company`, `com.your-company`, `WRAC Gain`, `wrac_gain_plugin`, `WtGn`, or the template repository URL.
+
+**Fix:** Rename template metadata to product metadata, or disable this rule with a documented reason for template/example repositories.
+
+### `source-metadata-single-source`
+
+**Expectation:** Template source code reads product identity from `src-plugin/Cargo.toml`.
+
+**Reason:** Rust descriptors, wrapper arguments, GUI About text, logs, and bundle metadata should not drift when a product is renamed.
+
+**Error conditions:**
+
+- The Rust descriptor source no longer uses build-script env vars generated from `package.metadata.wrac`.
+- `build.rs` no longer emits WRAC identity env vars from `package.metadata.wrac`.
+- `src-gui/vite.config.ts` no longer reads `../src-plugin/Cargo.toml` and injects `__WRAC_PLUGIN_METADATA__`.
+- The frontend no longer renders identity from `__WRAC_PLUGIN_METADATA__`.
+
+**Fix:** Keep `src-plugin/Cargo.toml` as the source of truth, or disable this rule with a documented reason for custom metadata generation.
+
+### `gui-native-commands-match`
+
+**Expectation:** Literal TypeScript `invoke(...)` command names are registered by Rust.
+
+**Reason:** Frontend/native command drift usually appears only when the GUI path is exercised. A simple literal-name check catches stale TypeScript calls before host smoke testing.
+
+**Error condition:** A string-literal TypeScript `invoke(...)` command is not registered by Rust `register_sync(...)`.
+
+**Fix:** Register the command on the Rust side, rename the TypeScript invoke, or disable this rule with a documented reason for dynamic command routing.
+
 ### `clap-descriptors-match-manifest`
 
 **Expectation:** The CLAP factory descriptors match `package.metadata.wrac.plugins`.
@@ -187,6 +239,7 @@ New checks are release-policy changes, not just code changes. Before opening a P
 
 - `Contents/Info.plist` is missing or unreadable.
 - `CFBundleExecutable`, `CFBundleName`, or `CFBundleDisplayName` differs from `bundle_name`.
+- The executable named by `CFBundleExecutable` is missing from `Contents/MacOS`.
 - `CFBundleIdentifier` differs from the primary plugin ID.
 - `CFBundleShortVersionString` or `CFBundleVersion` differs from the package version.
 - `NSHighResolutionCapable` is not `true`.
@@ -203,9 +256,12 @@ New checks are release-policy changes, not just code changes. Before opening a P
 
 - A requested VST3, AU, or standalone `Contents/Info.plist` is missing or unreadable.
 - VST3 `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString`, or `CFBundleVersion` differs from manifest metadata.
+- The executable named by VST3, AU, or standalone `CFBundleExecutable` is missing from `Contents/MacOS`.
 - AU `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString`, `CFBundleVersion`, or `NSHighResolutionCapable` differs from manifest metadata.
 - AU `AudioComponents[0]` is missing.
 - AU `AudioComponents[0].manufacturer`, `type`, `subtype`, `name`, or `version` differs from manifest metadata.
 - Standalone `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString`, or `CFBundleVersion` differs from manifest metadata.
 
 **Fix:** Keep wrapper and standalone bundle metadata generated from `package.metadata.wrac`.
+
+VST3 factory vendor/company metadata is not stored in the macOS VST3 `Info.plist`. WRAC checks the CLAP descriptor vendor against `package.metadata.wrac.company_name`; the VST3 wrapper derives its factory vendor from that descriptor, and Steinberg's VST3 validator prints the resulting factory metadata during validation.

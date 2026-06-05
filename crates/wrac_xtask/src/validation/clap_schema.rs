@@ -7,6 +7,7 @@ use clap_sys::ext::audio_ports::{
     CLAP_EXT_AUDIO_PORTS, CLAP_PORT_MONO, CLAP_PORT_STEREO, clap_audio_port_info,
     clap_plugin_audio_ports,
 };
+use clap_sys::ext::gui::CLAP_EXT_GUI;
 use clap_sys::ext::note_ports::{CLAP_EXT_NOTE_PORTS, clap_note_port_info, clap_plugin_note_ports};
 use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_param_info, clap_plugin_params};
 use clap_sys::ext::state::CLAP_EXT_STATE;
@@ -27,6 +28,7 @@ pub(crate) struct PluginSchema {
     pub(crate) plugin_vendor: String,
     pub(crate) plugin_version: String,
     pub(crate) plugin_features: Vec<String>,
+    pub(crate) has_gui: bool,
     pub(crate) has_state: bool,
     pub(crate) audio_inputs: Vec<AudioPortSchema>,
     pub(crate) audio_outputs: Vec<AudioPortSchema>,
@@ -197,6 +199,7 @@ unsafe fn read_plugin_schema(
 
     // Read extension presence and static port schemas from the created plugin instance.
     // This catches adapter/wrapper drift that source-side manifest checks cannot see.
+    let has_gui = unsafe { has_extension(plugin, CLAP_EXT_GUI.as_ptr()) }?;
     let has_state = unsafe { has_extension(plugin, CLAP_EXT_STATE.as_ptr()) }?;
     let audio_inputs = unsafe { read_audio_ports(plugin, true) }?;
     let audio_outputs = unsafe { read_audio_ports(plugin, false) }?;
@@ -209,6 +212,7 @@ unsafe fn read_plugin_schema(
         plugin_vendor,
         plugin_version,
         plugin_features,
+        has_gui,
         has_state,
         audio_inputs,
         audio_outputs,

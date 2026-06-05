@@ -30,6 +30,15 @@ pub(crate) fn validate_wrac_rules(
         &ctx.au_bundle(profile),
         &ctx.standalone_artifact(profile),
     );
+    results.extend(checks::evaluate_source_checks(
+        &schemas,
+        &ctx.metadata,
+        &ctx.metadata.validation,
+        &ctx.plugin_manifest(),
+        &ctx.root,
+        &ctx.plugin_root,
+        &ctx.gui_dir(),
+    ));
     results.extend(
         schemas
             .iter()

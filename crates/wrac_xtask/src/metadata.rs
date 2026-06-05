@@ -10,6 +10,7 @@ use crate::Result;
 pub(crate) struct PluginMetadata {
     pub(crate) package_name: String,
     pub(crate) version: String,
+    pub(crate) repository: Option<String>,
     pub(crate) company_name: String,
     pub(crate) auv2_manufacturer_code: String,
     pub(crate) bundle_name: String,
@@ -50,6 +51,7 @@ impl PluginMetadata {
         let metadata = Self {
             package_name: cargo_manifest.package.name,
             version: cargo_manifest.package.version,
+            repository: cargo_manifest.package.repository,
             company_name: wrac.company_name,
             auv2_manufacturer_code: wrac.auv2_manufacturer_code,
             bundle_name: wrac.bundle_name,
@@ -156,6 +158,7 @@ struct CargoManifest {
 struct CargoPackage {
     name: String,
     version: String,
+    repository: Option<String>,
     #[serde(default)]
     metadata: PackageMetadata,
 }
