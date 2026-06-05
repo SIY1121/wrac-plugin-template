@@ -171,7 +171,6 @@ jobs:
       AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL || secrets.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL }}
     needs:
       - rust-format
-      - rust-test
 
     # AAX uses private Avid downloads, so this job is intentionally kept out of
     # fork pull-request CI. Maintainers can run it with workflow_dispatch before
