@@ -2,64 +2,58 @@
 
 > English version: [production-readiness-checks.md](production-readiness-checks.md)
 
-`cargo xtask validate` は、指定されたプラグイン形式をビルドし、WRAC production-readiness checks を実行したあと、clap-validator、Steinberg VST3 validator、auval などの外部バリデーターを実行します。WRAC のチェックに違反がある場合はエラーとして扱い、コマンドは non-zero exit code を返します。
+Production-readiness check は、`cargo xtask validate` の中で実行される WRAC 独自のチェックです。違反がある場合はエラーとして扱い、コマンドは non-zero exit code を返します。
 
-WRAC production-readiness checks は、商用プラグインのための NovoNotes 独自のリリースポリシーチェックです。プラグイン形式の仕様そのものを検証するバリデーターではありません。このチェックは小さく保ってください。実際に起きていない問題に対するチェックは追加しないでください。production-readiness check として妥当なのは、すでに観測されたリリース、QA、ホスト互換性、サポート上の実問題を防ぐものだけです。
+このチェックは、商用プラグインのための NovoNotes 独自のリリースポリシーチェックです。プラグイン形式の仕様そのものを検証するバリデーターではありません。ルールリストは小さく保つ方針です。実際に観測されたホスト互換性、サポート上の実問題を防ぐルールだけ、さらにそのなかでも、他の方法で再発防止が難しい場合だけ新規ルール追加します。
 
-コマンドは各チェックを `pass`、`fail`、`disabled`、`skipped` としてログ出力します。CI ログから、どのリリースポリシーチェックが評価されたかを確認できます。
+## ルールの無効化
 
-## チェックの無効化
-
-チェックはプラグイン crate の manifest で rule ID ごとに無効化できます。無効化するルールには、空ではない `reason` が必須です。
+ルールはプラグイン crate の manifest で rule ID ごとに無効化できます。無効化する場合は、空ではない `reason` が必須です。
 
 ```toml
 [package.metadata.wrac.validation.disabled_rules.fender-studio-pro-generic-editor-single-knob]
 reason = "This product does not support Fender Studio Pro generic editor workflows."
 ```
 
-未知の rule ID と空の reason はエラーです。
+## ルールの追加
 
-チェックを無効化するのは、意図的な製品判断がある場合だけにしてください。プラグインがそのチェックのリリースポリシーを満たすべき場合は、無効化ではなくプラグインを修正してください。
+ルールを追加する場合、以下を行ってください。
 
-## チェックの追加
-
-新しいチェックの追加は、単なるコード変更ではなくリリースポリシーの変更です。PR を作る前に、author は以下を完了してください。
-
-- **妥当性:** そのチェックが、実際に起きた問題を扱っていることを確認する。仮説上のリスクに対するチェックは追加しない。
-- **重複回避:** 他のバリデーターがすでに検出するチェックと重複させない。観測済みの問題が再現するにもかかわらず `cargo xtask validate` が通ってしまう場合だけ、新しいチェックを追加する。
-- **ドキュメント:** このドキュメントの Check List に、期待される状態、理由、エラー条件、修正方法を追加する。
-- **Unit Test:** `pass`、`fail`、`disabled`、`skipped`、エッジケースをテストする。
-- **Manual Validate 必須:** unit test だけでは不十分です。必ず以下を実施する。
+- **妥当性:** そのルールが、実際に起きた問題を扱っていることを確認する。仮説上のリスクに対するルールは追加しないでください。
+- **重複回避:** 他のバリデーターがすでに検出する問題を重複検出しない。観測済みの問題が再現する状態にもかかわらず `cargo xtask validate` が通ってしまう場合だけ、新しいルールを追加してください。
+- **ドキュメント:** このドキュメントの Check List に、期待される状態、理由、エラー条件、修正方法を追加してください。
+- **手動確認必須:** unit test だけでは不十分です。必ず以下を実施してください。
   - 実際のテンプレートプラグインを意図的に壊し、`cargo xtask validate` が期待した rule ID と message で fail することを確認する。
-  - プラグインを元に戻し、コマンドがそのチェックを `pass`、`disabled`、または `skipped` としてログ出力することを確認する。
+  - ルールを無効化すれば通ることを確認する。通らない場合は他のバリデーターで重複検出されている可能性が高いのでルール追加しないでください。
+  - プラグインを元に戻し、ルールを有効化。チェックが通ることを確認する。
 
-## Check List
+## ルール一覧
 
 ### `fender-studio-pro-generic-editor-single-knob`
 
-**期待される状態:** Fender Studio Pro の generic editor workflow をサポートする production plugin は、visible な non-bypass parameter を 0 個、または 2 個以上公開する。
+**期待される状態:** Fender Studio Pro の generic editor をサポートする製品は、bypass 以外の parameter を 0 個、または 2 個以上公開するべきです。
 
-**理由:** Fender Studio Pro 8.0.3 の generic editor は、このパラメーター構成では knob を表示できません。このルールでは bypass parameter は knob 数に含めません。
+**理由:** Fender Studio Pro 8.0.3 の generic editor は、ノブが一つだけになるパラメーター構成では、一個もノブを表示しません。ユーザーがバグと感じるので、避けるべきです。bypass parameter は元々ノブ表示されないため、カウントに含めません。
 
-**エラー条件:** CLAP または VST3 validation が要求されたとき、プラグインが visible な non-bypass parameter をちょうど 1 個公開している。
+**エラー条件:** CLAP または VST3 validation が要求されたとき、プラグインが bypass 以外の parameter をちょうど 1 個公開している。
 
-**修正方法:** visible な non-bypass parameter を 0 個または 2 個以上にする。製品が Fender Studio Pro generic editor workflow を意図的にサポートしない場合は、reason を書いてルールを無効化する。
+**修正方法:** bypass 以外の parameter を 0 個または 2 個以上にしてください。
 
 ### `luna-vst3-param-id-must-match-index`
 
-**期待される状態:** VST3-compatible plugin は、public parameter ID を parameter list の index と一致させる。
+**期待される状態:** LUNA の VST3 をサポートする場合は、parameter ID を parameter list の index と一致させるべきです。
 
 **理由:** LUNA 2.0.3.4381 では、VST3 parameter ID が parameter list index と異なる場合、VST3 automation write が失敗することがあります。
 
-**エラー条件:** VST3 validation が要求されたとき、public parameter ID が parameter list index と異なる。
+**エラー条件:** VST3 ターゲットを含む validation が要求されたとき、public parameter ID が parameter list index と異なる。
 
-**修正方法:** パラメーターを並べ替えるか public parameter ID を調整し、各 public parameter ID が index と一致するようにする。
+**修正方法:** リリース前の場合、パラメーターを並べ替えるか parameter ID を調整し、ID と index と一致するようにしてください。リリース後の場合は、parameter ID を変更せず、このルールの無効化を推奨します。
 
 ### `bypass-param-shape`
 
-**期待される状態:** プラグインは bypass parameter を最大 1 個だけ公開し、そのパラメーターが boolean の host bypass control として振る舞う。
+**期待される状態:** プラグインは bypass parameter を最大 1 個だけ公開し、そのパラメーターが boolean の host bypass control として振る舞うべきです。
 
-**理由:** host bypass UI、bypass automation、generic editor、control surface は、bypass が boolean shape のパラメーターとして 1 つ公開されているときに最も予測しやすく動作します。
+**理由:** ホストアプリケーションは、bypass パラメーター専用の UI を持つことがあります。この UI がユーザーの期待通り動作するためには、このルールを満たす parameter shape にすべきです。
 
 **エラー条件:**
 
@@ -68,24 +62,24 @@ reason = "This product does not support Fender Studio Pro generic editor workflo
 - bypass parameter の range が `0..1` ではない。
 - bypass parameter の default が `0` または `1` ではない。
 
-**修正方法:** bypass、stepped、enum flag を持ち、range `0..1`、default `0` または `1` の bypass parameter を 1 つ公開する。
+**修正方法:** bypass、stepped、enum flag を持ち、range `0..1`、default `0` または `1` の bypass parameter を 1 つ公開してください。
 
 ### `plugin-requires-bypass`
 
-**期待される状態:** production plugin は valid な bypass parameter を 1 つ公開する。
+**期待される状態:** bypass parameter を 1 つ公開するべきです。
 
-**理由:** host bypass UI、bypass automation、generic editor、control surface は、host-visible な bypass control がプラグインから提供されることを期待する場合があります。valid な bypass parameter は実装コストが低く、プラグインのカテゴリーを問わずホスト固有の互換性リスクを下げます。
+**理由:** bypass parameter は実装コストが低く、プラグインの種類を問わずホスト固有の互換性リスクを下げます。
 
 **エラー条件:** プラグインが bypass parameter を公開していない。
 
-**修正方法:** bypass parameter を 1 つ追加する。製品として host bypass を意図的に提供しない場合は、reason を書いてルールを無効化する。
+**修正方法:** bypass parameter を 1 つ追加してください。製品として bypass を意図的に提供しない場合は、reason を書いてルールを無効化してください。
 
 ### `template-placeholders-renamed`
 
-**期待される状態:** テンプレート由来の仮の名前、ID、URL を製品固有の値に置き換える。
+**期待される状態:** テンプレート由来の仮の名前、ID、URL は、製品固有の値に置き換えるべきです。
 
-**理由:** これは、製品 metadata にテンプレートの識別情報が残るセットアップ失敗が実際に観測されたためのチェックです。仮の company name、plugin ID、plugin name、AU code、repository URL が残ると、ホストの scan cache、plugin menu、AU registration、log、support diagnostics に誤った製品識別情報が出ます。このルールはテンプレートリポジトリ自体では skipped されます。
+**理由:** テンプレート由来の値は、製品作成時に手作業で置き換える必要があるため、見落としが起きやすいです。
 
-**エラー条件:** manifest metadata に `Your Company`、`com.your-company`、`WRAC Gain`、`wrac_gain_plugin`、`WtGn`、テンプレートリポジトリ URL などの placeholder が残っている。
+**エラー条件:** manifest metadata に `Your Company`、`com.your-company`、`WRAC Gain`、`wrac_gain_plugin`、`WtGn`、テンプレートリポジトリ URL などの placeholder が残っている。このルールはテンプレートリポジトリ自体では skipped されます。
 
-**修正方法:** テンプレート由来の metadata を製品固有の metadata に置き換える。テンプレートまたは example repository として意図的に残す場合は、reason を書いてルールを無効化する。
+**修正方法:** テンプレート由来の metadata を製品固有の metadata に置き換えてください。テンプレートまたは example repository として意図的に残す場合は、reason を書いてルールを無効化してください。
