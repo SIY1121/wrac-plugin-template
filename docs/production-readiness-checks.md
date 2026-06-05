@@ -2,7 +2,7 @@
 
 `cargo xtask validate` builds the requested plugin formats, runs WRAC production-readiness checks, and then runs external format validators such as clap-validator, Steinberg's VST3 validator, and auval. WRAC check violations are errors and return a non-zero exit code.
 
-WRAC production-readiness checks are opinionated NovoNotes release-policy checks for commercial plugins, not format-spec validators. They can require a low-cost convention when NovoNotes expects it to reduce compatibility risk, support burden, or product inconsistency, even without a known format-spec violation or confirmed host-specific bug.
+WRAC production-readiness checks are opinionated NovoNotes release-policy checks for commercial plugins, not format-spec validators. Keep this check set small. Do not add rules for problems that have not actually happened. A production-readiness rule is appropriate only when it prevents a real release, QA, host-compatibility, or support problem that has already been observed.
 
 The command logs every check as `pass`, `fail`, `disabled`, or `skipped` so CI logs show which release-policy checks were evaluated.
 
@@ -23,6 +23,8 @@ Disable checks only for intentional product decisions. If the plugin is expected
 
 New checks are release-policy changes, not just code changes. Before opening a PR, the author must complete the following:
 
+- **Justification:** Confirm that the check covers a problem that has actually happened. Do not add checks for hypothetical risks.
+- **Avoid duplication:** Do not duplicate checks that are already covered by other validators. Add a new check only when the observed problem reproduces but `cargo xtask validate` still passes.
 - **Document:** Add the expectation, reason, error condition, and fix to this document's Check List.
 - **Unit Test:** Cover `pass`, `fail`, `disabled`, `skipped`, and edge cases.
 - **Manually Validate (Mandatory):** Unit tests alone are insufficient. You must:
@@ -75,3 +77,13 @@ New checks are release-policy changes, not just code changes. Before opening a P
 **Error condition:** The plugin does not expose a bypass parameter.
 
 **Fix:** Add one bypass parameter, or disable the rule with a documented reason when the product intentionally does not provide host bypass.
+
+### `template-placeholders-renamed`
+
+**Expectation:** Template placeholder names, IDs, and URLs are replaced with product-specific values.
+
+**Reason:** This covers an observed setup failure where template identity remained in product metadata. Placeholder company names, plugin IDs, plugin names, AU codes, and repository URLs can leak into host scan caches, plugin menus, AU registration, logs, and support diagnostics. This rule is skipped in the template repository itself.
+
+**Error condition:** Manifest metadata still contains template placeholders such as `Your Company`, `com.your-company`, `WRAC Gain`, `wrac_gain_plugin`, `WtGn`, or the template repository URL.
+
+**Fix:** Replace template metadata with product-specific metadata, or disable the rule with a documented reason when the repository is intentionally a template or example.

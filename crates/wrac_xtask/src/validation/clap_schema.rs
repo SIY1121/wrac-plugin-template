@@ -139,13 +139,7 @@ unsafe fn read_plugin_schema(
         return Err(format!("CLAP descriptor has a null plugin id at index {index}").into());
     }
     let plugin_id = unsafe { CStr::from_ptr(descriptor.id) };
-    let plugin_name = if descriptor.name.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(descriptor.name) }
-            .to_string_lossy()
-            .into_owned()
-    };
+    let plugin_name = unsafe { descriptor_string(descriptor.name) };
     let host = validator_clap_host();
     let plugin = unsafe { create_plugin(factory, &host, plugin_id.as_ptr()) };
     if plugin.is_null() {
@@ -167,6 +161,8 @@ unsafe fn read_plugin_schema(
         }
     }
 
+    // Read only the host-visible schema used by the current release-policy checks.
+    // Broader CLAP capability validation is left to external format validators.
     let params = unsafe { read_params(plugin) }?;
     Ok(PluginSchema {
         plugin_id: plugin_id.to_string_lossy().into_owned(),
@@ -175,13 +171,30 @@ unsafe fn read_plugin_schema(
     })
 }
 
+unsafe fn descriptor_string(value: *const c_char) -> String {
+    if value.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(value) }
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+unsafe fn plugin_extension(
+    plugin: *const clap_sys::plugin::clap_plugin,
+    extension_id: *const c_char,
+) -> Result<*const c_void> {
+    let get_extension =
+        unsafe { (*plugin).get_extension }.ok_or("CLAP plugin has no get_extension callback")?;
+    Ok(unsafe { get_extension(plugin, extension_id) })
+}
+
 unsafe fn read_params(
     plugin: *const clap_sys::plugin::clap_plugin,
 ) -> Result<Vec<ParameterSchema>> {
-    let get_extension =
-        unsafe { (*plugin).get_extension }.ok_or("CLAP plugin has no get_extension callback")?;
     let params =
-        unsafe { get_extension(plugin, CLAP_EXT_PARAMS.as_ptr()) as *const clap_plugin_params };
+        unsafe { plugin_extension(plugin, CLAP_EXT_PARAMS.as_ptr())? as *const clap_plugin_params };
     if params.is_null() {
         return Ok(Vec::new());
     }

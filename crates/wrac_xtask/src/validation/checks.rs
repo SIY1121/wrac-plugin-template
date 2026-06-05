@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use clap_sys::ext::params::{
     CLAP_PARAM_IS_BYPASS, CLAP_PARAM_IS_ENUM, CLAP_PARAM_IS_HIDDEN, CLAP_PARAM_IS_READONLY,
     CLAP_PARAM_IS_STEPPED,
 };
 
-use crate::metadata::ValidationMetadata;
+use crate::metadata::{PluginMetadata, ValidationMetadata};
 use crate::targets::ValidateTarget;
 use crate::{Result, targets::ValidateTarget as Target};
 
@@ -15,12 +16,14 @@ const RULE_FENDER_SINGLE_KNOB: &str = "fender-studio-pro-generic-editor-single-k
 const RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX: &str = "luna-vst3-param-id-must-match-index";
 const RULE_BYPASS_PARAM_SHAPE: &str = "bypass-param-shape";
 const RULE_PLUGIN_REQUIRES_BYPASS: &str = "plugin-requires-bypass";
+const RULE_TEMPLATE_PLACEHOLDERS_RENAMED: &str = "template-placeholders-renamed";
 
 const KNOWN_RULES: &[&str] = &[
     RULE_FENDER_SINGLE_KNOB,
     RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
     RULE_BYPASS_PARAM_SHAPE,
     RULE_PLUGIN_REQUIRES_BYPASS,
+    RULE_TEMPLATE_PLACEHOLDERS_RENAMED,
 ];
 
 pub(crate) fn validate_disabled_rules(validation: &ValidationMetadata) -> Result<()> {
@@ -201,6 +204,151 @@ pub(crate) fn evaluate_checks(
     results
 }
 
+pub(crate) fn evaluate_source_checks(
+    metadata: &PluginMetadata,
+    validation: &ValidationMetadata,
+    location: &Path,
+    repository_root: &Path,
+) -> Vec<CheckResult> {
+    let subject = CheckSubject::bundle(metadata);
+    let mut results = Vec::new();
+
+    push_check_result_for_subject(
+        &mut results,
+        validation,
+        &subject,
+        RULE_TEMPLATE_PLACEHOLDERS_RENAMED,
+        if is_template_development_checkout(repository_root) {
+            CheckStatus::Skipped(
+                "Template placeholder metadata is expected in the template repository itself.",
+            )
+        } else {
+            CheckStatus::from_violations(template_placeholder_violations(metadata, location))
+        },
+    );
+
+    results
+}
+
+fn template_placeholder_violations(
+    metadata: &PluginMetadata,
+    location: &Path,
+) -> Vec<RuleViolation> {
+    let subject = CheckSubject::bundle(metadata);
+    let mut violations = Vec::new();
+
+    check_template_placeholder(
+        &mut violations,
+        &subject,
+        location,
+        "package.name",
+        &metadata.package_name,
+        "wrac_gain_plugin",
+    );
+    check_template_placeholder(
+        &mut violations,
+        &subject,
+        location,
+        "package.repository",
+        metadata.repository.as_deref().unwrap_or_default(),
+        "github.com/novonotes/wrac-plugin-template",
+    );
+    check_template_placeholder(
+        &mut violations,
+        &subject,
+        location,
+        "package.metadata.wrac.company_name",
+        &metadata.company_name,
+        "Your Company",
+    );
+    check_template_placeholder(
+        &mut violations,
+        &subject,
+        location,
+        "package.metadata.wrac.bundle_name",
+        &metadata.bundle_name,
+        "WRAC Gain",
+    );
+    check_template_placeholder(
+        &mut violations,
+        &subject,
+        location,
+        "package.metadata.wrac.standalone_name",
+        &metadata.standalone_name,
+        "WRAC Gain",
+    );
+    for plugin in &metadata.plugins {
+        check_template_placeholder(
+            &mut violations,
+            &subject,
+            location,
+            "package.metadata.wrac.plugins.plugin_id",
+            &plugin.plugin_id,
+            "com.your-company",
+        );
+        check_template_placeholder(
+            &mut violations,
+            &subject,
+            location,
+            "package.metadata.wrac.plugins.plugin_name",
+            &plugin.plugin_name,
+            "WRAC Gain",
+        );
+        check_template_placeholder(
+            &mut violations,
+            &subject,
+            location,
+            "package.metadata.wrac.plugins.auv2_subtype",
+            &plugin.auv2_subtype,
+            "WtGn",
+        );
+    }
+    violations
+}
+
+fn check_template_placeholder(
+    violations: &mut Vec<RuleViolation>,
+    subject: &CheckSubject,
+    location: &Path,
+    field: &'static str,
+    value: &str,
+    placeholder: &'static str,
+) {
+    if value.contains(placeholder) {
+        violations.push(RuleViolation {
+            plugin_id: subject.plugin_id.clone(),
+            plugin_name: subject.plugin_name.clone(),
+            location: location.to_path_buf(),
+            rule_id: RULE_TEMPLATE_PLACEHOLDERS_RENAMED,
+            message: format!(
+                "{field} still contains template placeholder \"{placeholder}\". value=\"{value}\""
+            ),
+            fix: "Rename template placeholder metadata before shipping, or disable this rule with a documented reason for template/example repositories.",
+        });
+    }
+}
+
+fn is_template_development_checkout(repository_root: &Path) -> bool {
+    let Ok(output) = Command::new("git")
+        .args(["remote", "-v"])
+        .current_dir(repository_root)
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let remotes = String::from_utf8_lossy(&output.stdout);
+    [
+        "github.com/novonotes/wrac-plugin-template",
+        "github.com/satoshi-szk/wrac-plugin-template",
+        "github.com/satoshi-assistant/wrac-plugin-template",
+    ]
+    .iter()
+    .any(|needle| remotes.contains(needle))
+}
+
 fn push_check_result(
     results: &mut Vec<CheckResult>,
     validation: &ValidationMetadata,
@@ -225,6 +373,45 @@ fn push_check_result(
         rule_id,
         status,
     });
+}
+
+fn push_check_result_for_subject(
+    results: &mut Vec<CheckResult>,
+    validation: &ValidationMetadata,
+    subject: &CheckSubject,
+    rule_id: &'static str,
+    status: CheckStatus,
+) {
+    if let Some(disabled) = validation.disabled_rules.get(rule_id) {
+        results.push(CheckResult {
+            plugin_id: subject.plugin_id.clone(),
+            plugin_name: subject.plugin_name.clone(),
+            rule_id,
+            status: CheckStatus::Disabled(disabled.reason.clone()),
+        });
+        return;
+    }
+    results.push(CheckResult {
+        plugin_id: subject.plugin_id.clone(),
+        plugin_name: subject.plugin_name.clone(),
+        rule_id,
+        status,
+    });
+}
+
+struct CheckSubject {
+    plugin_id: String,
+    plugin_name: String,
+}
+
+impl CheckSubject {
+    fn bundle(metadata: &PluginMetadata) -> Self {
+        let primary = metadata.primary_plugin();
+        Self {
+            plugin_id: primary.plugin_id.clone(),
+            plugin_name: metadata.bundle_name.clone(),
+        }
+    }
 }
 
 fn nearly_equal(a: f64, b: f64) -> bool {
@@ -282,7 +469,9 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
 
-    use crate::metadata::{DisabledValidationRule, ValidationMetadata};
+    use crate::metadata::{
+        DisabledValidationRule, PluginMetadata, PluginProductMetadata, ValidationMetadata,
+    };
     use crate::targets::ValidateTarget;
 
     use super::super::clap_schema::{ParameterSchema, PluginSchema};
@@ -293,6 +482,25 @@ mod tests {
             plugin_id: "com.example.test".to_string(),
             plugin_name: "Test Plugin".to_string(),
             params,
+        }
+    }
+
+    fn metadata() -> PluginMetadata {
+        PluginMetadata {
+            package_name: "test_plugin".to_string(),
+            version: "1.0.0".to_string(),
+            repository: Some("https://github.com/example/test-plugin".to_string()),
+            company_name: "Example".to_string(),
+            auv2_manufacturer_code: "ExCo".to_string(),
+            bundle_name: "Test Plugin".to_string(),
+            standalone_name: "Test Plugin Standalone".to_string(),
+            plugins: vec![PluginProductMetadata {
+                plugin_id: "com.example.test".to_string(),
+                plugin_name: "Test Plugin".to_string(),
+                auv2_type: "aufx".to_string(),
+                auv2_subtype: "TstP".to_string(),
+            }],
+            validation: ValidationMetadata::default(),
         }
     }
 
@@ -569,5 +777,21 @@ mod tests {
             status_for(&results, RULE_PLUGIN_REQUIRES_BYPASS),
             CheckStatus::Passed
         ));
+    }
+
+    #[test]
+    fn placeholder_check_rejects_template_identity() {
+        let mut metadata = metadata();
+        metadata.package_name = "wrac_gain_plugin".to_string();
+        metadata.company_name = "Your Company".to_string();
+        metadata.plugins[0].plugin_id = "com.your-company.wrac-gain".to_string();
+
+        let violations = template_placeholder_violations(&metadata, Path::new("Cargo.toml"));
+
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.rule_id == RULE_TEMPLATE_PLACEHOLDERS_RENAMED)
+        );
     }
 }
