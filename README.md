@@ -96,6 +96,9 @@ cargo xtask validate
 cargo xtask install
 ```
 
+`cargo xtask validate` runs WRAC production-readiness checks before external format validators.
+For the check list and disable format, see [Production-Readiness Checks](docs/production-readiness-checks.md).
+
 Build and launch the standalone app:
 
 ```bash

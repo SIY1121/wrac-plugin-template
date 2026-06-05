@@ -20,6 +20,9 @@ bundle_name = "WRAC Gain"
 # User-visible standalone app name.
 standalone_name = "WRAC Gain Standalone"
 
+[package.metadata.wrac.validation.disabled_rules.fender-studio-pro-generic-editor-single-knob]
+reason = "WRAC Gain is a minimal one-knob starter example. Products that support Fender Studio Pro should add a second real visible control instead of shipping this exception."
+
 [[package.metadata.wrac.plugins]]
 # Reverse-DNS identifier. Use your own domain or another namespace you control.
 plugin_id = "com.your-company.wrac-gain"

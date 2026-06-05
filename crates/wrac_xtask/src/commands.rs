@@ -15,6 +15,7 @@ use crate::util::{
     common_program_files, copy_path, ensure_exists, env_value_or, home_dir, local_app_data, on_off,
     remove_if_exists, run,
 };
+use crate::validation::validate_wrac_rules;
 
 const CLAP_VALIDATOR_VERSION: &str = "0.3.2";
 
@@ -605,6 +606,8 @@ fn validate_targets(
         println!("No CLAP/VST3/AU targets to validate.");
         return Ok(());
     }
+
+    validate_wrac_rules(ctx, profile, targets)?;
 
     if targets.contains(&ValidateTarget::Clap) {
         let clap = ctx.clap_bundle(profile);
