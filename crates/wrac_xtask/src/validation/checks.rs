@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -243,22 +242,7 @@ pub(crate) fn evaluate_source_checks(
 
 fn param_info_shape_violations(schema: &PluginSchema, location: &Path) -> Vec<RuleViolation> {
     let mut violations = Vec::new();
-    let mut seen_ids = HashSet::new();
-
     for param in &schema.params {
-        if !seen_ids.insert(param.id) {
-            violations.push(RuleViolation {
-                plugin_id: schema.plugin_id.clone(),
-                plugin_name: schema.plugin_name.clone(),
-                location: location.to_path_buf(),
-                rule_id: RULE_PARAM_INFO_SHAPE,
-                message: format!(
-                    "Public parameter IDs must be unique. duplicate_id={} name=\"{}\"",
-                    param.id, param.name
-                ),
-                fix: "Assign one stable unique parameter ID to each public parameter.",
-            });
-        }
         if param.name.trim().is_empty() {
             violations.push(RuleViolation {
                 plugin_id: schema.plugin_id.clone(),
@@ -269,47 +253,17 @@ fn param_info_shape_violations(schema: &PluginSchema, location: &Path) -> Vec<Ru
                 fix: "Expose a non-empty stable name for every public parameter.",
             });
         }
-        if !param.min_value.is_finite()
-            || !param.max_value.is_finite()
-            || !param.default_value.is_finite()
-        {
+        if nearly_equal(param.min_value, param.max_value) {
             violations.push(RuleViolation {
                 plugin_id: schema.plugin_id.clone(),
                 plugin_name: schema.plugin_name.clone(),
                 location: location.to_path_buf(),
                 rule_id: RULE_PARAM_INFO_SHAPE,
                 message: format!(
-                    "Parameter ranges and defaults must be finite. id={} name=\"{}\" min={} max={} default={}",
-                    param.id, param.name, param.min_value, param.max_value, param.default_value
-                ),
-                fix: "Use finite min, max, and default values.",
-            });
-            continue;
-        }
-        if param.min_value >= param.max_value {
-            violations.push(RuleViolation {
-                plugin_id: schema.plugin_id.clone(),
-                plugin_name: schema.plugin_name.clone(),
-                location: location.to_path_buf(),
-                rule_id: RULE_PARAM_INFO_SHAPE,
-                message: format!(
-                    "Parameter min must be less than max. id={} name=\"{}\" min={} max={}",
+                    "Parameter range must have non-zero width. id={} name=\"{}\" min={} max={}",
                     param.id, param.name, param.min_value, param.max_value
                 ),
-                fix: "Set each parameter range so min < max.",
-            });
-        }
-        if param.default_value < param.min_value || param.default_value > param.max_value {
-            violations.push(RuleViolation {
-                plugin_id: schema.plugin_id.clone(),
-                plugin_name: schema.plugin_name.clone(),
-                location: location.to_path_buf(),
-                rule_id: RULE_PARAM_INFO_SHAPE,
-                message: format!(
-                    "Parameter default must be inside its range. id={} name=\"{}\" min={} max={} default={}",
-                    param.id, param.name, param.min_value, param.max_value, param.default_value
-                ),
-                fix: "Set each default value inside its declared range.",
+                fix: "Set each parameter range so min and max are different.",
             });
         }
     }
@@ -880,9 +834,11 @@ mod tests {
     }
 
     #[test]
-    fn parameter_info_requires_unique_ids() {
+    fn parameter_info_requires_non_empty_names() {
+        let mut gain = param(1, 0);
+        gain.name = String::new();
         let results = evaluate_checks(
-            &schema(vec![valid_bypass_param(0), param(0, 0)]),
+            &schema(vec![valid_bypass_param(0), gain]),
             &[ValidateTarget::Clap],
             &no_disabled_rules(),
             Path::new("Cargo.toml"),
@@ -891,9 +847,9 @@ mod tests {
     }
 
     #[test]
-    fn parameter_info_requires_default_inside_range() {
+    fn parameter_info_requires_non_zero_width_ranges() {
         let mut gain = param(1, 0);
-        gain.default_value = 2.0;
+        gain.max_value = gain.min_value;
         let results = evaluate_checks(
             &schema(vec![valid_bypass_param(0), gain]),
             &[ValidateTarget::Clap],

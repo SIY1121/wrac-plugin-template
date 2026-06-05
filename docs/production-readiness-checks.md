@@ -50,17 +50,14 @@ Adding a new rule is a release-policy change, not just a code change. Before ope
 
 **Expectation:** Public parameters should have stable, host-safe identity and value metadata.
 
-**Reason:** Parameter IDs, names, ranges, and defaults are product code. Small mistakes can break automation, generic editors, control surfaces, or project recall.
+**Reason:** Parameter names and ranges are product code. Some malformed metadata passes external format validation but can still produce broken host UI or unusable generic controls.
 
 **Error conditions:**
 
-- A public parameter ID is duplicated.
 - A public parameter name is empty.
-- A public parameter min, max, or default is not finite.
-- A public parameter min is greater than or equal to max.
-- A public parameter default is outside its declared range.
+- A public parameter min equals max.
 
-**Fix:** Give every public parameter a stable unique ID, a non-empty name, a finite `min < max` range, and a finite default inside the range.
+**Fix:** Give every public parameter a non-empty name and a range with different min and max values.
 
 ### `bypass-param-shape`
 
