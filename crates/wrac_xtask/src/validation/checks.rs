@@ -16,7 +16,6 @@ const RULE_FENDER_SINGLE_KNOB: &str = "fender-studio-pro-generic-editor-single-k
 const RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX: &str = "luna-vst3-param-id-must-match-index";
 const RULE_BYPASS_PARAM_SHAPE: &str = "bypass-param-shape";
 const RULE_PLUGIN_REQUIRES_BYPASS: &str = "plugin-requires-bypass";
-const RULE_PARAM_INFO_SHAPE: &str = "param-info-shape";
 const RULE_TEMPLATE_PLACEHOLDERS_RENAMED: &str = "template-placeholders-renamed";
 
 const KNOWN_RULES: &[&str] = &[
@@ -24,7 +23,6 @@ const KNOWN_RULES: &[&str] = &[
     RULE_LUNA_VST3_PARAM_ID_MATCH_INDEX,
     RULE_BYPASS_PARAM_SHAPE,
     RULE_PLUGIN_REQUIRES_BYPASS,
-    RULE_PARAM_INFO_SHAPE,
     RULE_TEMPLATE_PLACEHOLDERS_RENAMED,
 ];
 
@@ -133,14 +131,6 @@ pub(crate) fn evaluate_checks(
         );
     }
 
-    push_check_result(
-        &mut results,
-        validation,
-        schema,
-        RULE_PARAM_INFO_SHAPE,
-        CheckStatus::from_violations(param_info_shape_violations(schema, location)),
-    );
-
     let mut bypass_shape_violations = Vec::new();
     if bypass_params.len() > 1 {
         bypass_shape_violations.push(RuleViolation {
@@ -240,37 +230,6 @@ pub(crate) fn evaluate_source_checks(
     results
 }
 
-fn param_info_shape_violations(schema: &PluginSchema, location: &Path) -> Vec<RuleViolation> {
-    let mut violations = Vec::new();
-    for param in &schema.params {
-        if param.name.trim().is_empty() {
-            violations.push(RuleViolation {
-                plugin_id: schema.plugin_id.clone(),
-                plugin_name: schema.plugin_name.clone(),
-                location: location.to_path_buf(),
-                rule_id: RULE_PARAM_INFO_SHAPE,
-                message: format!("Public parameter names must not be empty. id={}", param.id),
-                fix: "Expose a non-empty stable name for every public parameter.",
-            });
-        }
-        if nearly_equal(param.min_value, param.max_value) {
-            violations.push(RuleViolation {
-                plugin_id: schema.plugin_id.clone(),
-                plugin_name: schema.plugin_name.clone(),
-                location: location.to_path_buf(),
-                rule_id: RULE_PARAM_INFO_SHAPE,
-                message: format!(
-                    "Parameter range must have non-zero width. id={} name=\"{}\" min={} max={}",
-                    param.id, param.name, param.min_value, param.max_value
-                ),
-                fix: "Set each parameter range so min and max are different.",
-            });
-        }
-    }
-
-    violations
-}
-
 fn template_placeholder_violations(
     metadata: &PluginMetadata,
     location: &Path,
@@ -318,7 +277,7 @@ fn template_placeholder_violations(
         &metadata.standalone_name,
         "WRAC Gain",
     );
-    for (index, plugin) in metadata.plugins.iter().enumerate() {
+    for plugin in &metadata.plugins {
         check_template_placeholder(
             &mut violations,
             &subject,
@@ -343,19 +302,6 @@ fn template_placeholder_violations(
             &plugin.auv2_subtype,
             "WtGn",
         );
-        if plugin.auv2_type == "aufx" && metadata.package_name == "wrac_gain_plugin" {
-            violations.push(RuleViolation {
-                plugin_id: subject.plugin_id.clone(),
-                plugin_name: subject.plugin_name.clone(),
-                location: location.to_path_buf(),
-                rule_id: RULE_TEMPLATE_PLACEHOLDERS_RENAMED,
-                message: format!(
-                    "package.metadata.wrac.plugins[{index}].auv2_type still belongs to the unchanged WRAC Gain template identity. value=\"{}\"",
-                    plugin.auv2_type
-                ),
-                fix: "Rename template placeholder metadata before shipping, or disable this rule with a documented reason for template/example repositories.",
-            });
-        }
     }
     violations
 }
@@ -831,32 +777,6 @@ mod tests {
             status_for(&results, RULE_PLUGIN_REQUIRES_BYPASS),
             CheckStatus::Passed
         ));
-    }
-
-    #[test]
-    fn parameter_info_requires_non_empty_names() {
-        let mut gain = param(1, 0);
-        gain.name = String::new();
-        let results = evaluate_checks(
-            &schema(vec![valid_bypass_param(0), gain]),
-            &[ValidateTarget::Clap],
-            &no_disabled_rules(),
-            Path::new("Cargo.toml"),
-        );
-        assert!(rule_failed(&results, RULE_PARAM_INFO_SHAPE));
-    }
-
-    #[test]
-    fn parameter_info_requires_non_zero_width_ranges() {
-        let mut gain = param(1, 0);
-        gain.max_value = gain.min_value;
-        let results = evaluate_checks(
-            &schema(vec![valid_bypass_param(0), gain]),
-            &[ValidateTarget::Clap],
-            &no_disabled_rules(),
-            Path::new("Cargo.toml"),
-        );
-        assert!(rule_failed(&results, RULE_PARAM_INFO_SHAPE));
     }
 
     #[test]

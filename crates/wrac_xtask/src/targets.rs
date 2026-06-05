@@ -55,7 +55,6 @@ pub(crate) enum ValidateTarget {
     Clap,
     Vst3,
     Au,
-    Standalone,
 }
 
 impl ValidateTarget {
@@ -64,7 +63,6 @@ impl ValidateTarget {
             Self::Clap => "CLAP",
             Self::Vst3 => "VST3",
             Self::Au => "AU",
-            Self::Standalone => "Standalone",
         }
     }
 
@@ -73,7 +71,6 @@ impl ValidateTarget {
             Self::Clap => Target::Clap,
             Self::Vst3 => Target::Vst3,
             Self::Au => Target::Au,
-            Self::Standalone => Target::Standalone,
         }
     }
 }
@@ -143,18 +140,9 @@ impl Platform {
                 ValidateTarget::Clap,
                 ValidateTarget::Vst3,
                 ValidateTarget::Au,
-                ValidateTarget::Standalone,
             ],
-            Self::Windows => vec![
-                ValidateTarget::Clap,
-                ValidateTarget::Vst3,
-                ValidateTarget::Standalone,
-            ],
-            Self::Linux => vec![
-                ValidateTarget::Clap,
-                ValidateTarget::Vst3,
-                ValidateTarget::Standalone,
-            ],
+            Self::Windows => vec![ValidateTarget::Clap, ValidateTarget::Vst3],
+            Self::Linux => vec![ValidateTarget::Clap, ValidateTarget::Vst3],
         }
     }
 
