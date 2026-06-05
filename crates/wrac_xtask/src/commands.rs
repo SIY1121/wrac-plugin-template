@@ -378,6 +378,9 @@ fn add_wrapper_product_args(ctx: &Context, command: &mut Command, build: Wrapper
     for (index, plugin) in ctx.metadata.plugins.iter().enumerate() {
         match build {
             WrapperBuild::Plugin { au: true, .. } => {
+                // CLAP/VST3 read product descriptors from the Rust plugin factory.
+                // AUv2 cannot, so only AUv2 builds need per-product output and
+                // four-character AudioComponent identity values from xtask.
                 command
                     .arg(format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_OUTPUT_NAME={}",
@@ -393,6 +396,9 @@ fn add_wrapper_product_args(ctx: &Context, command: &mut Command, build: Wrapper
                     ));
             }
             WrapperBuild::Standalone => {
+                // Each standalone app embeds the product ID it should host at
+                // compile time; passing all standalone metadata keeps CMake from
+                // choosing an implicit primary product.
                 command
                     .arg(format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_OUTPUT_NAME={}",
@@ -461,6 +467,8 @@ fn standalone_plugin_to_launch<'a>(
     }
     match ctx.metadata.plugins.as_slice() {
         [plugin] => Ok(plugin),
+        // Avoid silently launching the first product from a package whose
+        // metadata intentionally exposes more than one standalone artifact.
         plugins => Err(format!(
             "multiple plugin products found: {}. Use --plugin-id <PLUGIN_ID>.",
             plugins

@@ -117,6 +117,8 @@ impl Context {
         profile: BuildProfile,
         plugin: &PluginProductMetadata,
     ) -> PathBuf {
+        // AUv2 products are installed as separate component bundles, named by
+        // product display name rather than the shared CLAP/VST3 bundle name.
         self.plugins_dir(profile)
             .join(self.metadata.au_bundle_name(plugin))
     }
@@ -134,6 +136,9 @@ impl Context {
         profile: BuildProfile,
         plugin: &PluginProductMetadata,
     ) -> PathBuf {
+        // Standalone app names are product metadata so multi-product templates
+        // can expose distinct launchable artifacts without deriving names from
+        // bundle-level metadata.
         let filename = match self.platform {
             Platform::Macos => format!("{}.app", plugin.standalone_name),
             Platform::Windows => format!("{}.exe", plugin.standalone_name),

@@ -75,8 +75,10 @@ impl PluginMetadata {
     }
 
     pub(crate) fn bundle_identity_plugin(&self) -> &PluginProductMetadata {
-        // WRAC bundles may expose multiple plugin products from one binary, but wrapper
-        // bundle-level metadata still needs one stable identity.
+        // CLAP bundle Info.plist has one CFBundleIdentifier even when the CLAP
+        // factory exposes multiple products. Use the first metadata entry only
+        // for that bundle-level identifier; product-specific outputs must still
+        // iterate over `plugins`.
         self.plugins
             .first()
             .expect("validated metadata must contain at least one plugin")

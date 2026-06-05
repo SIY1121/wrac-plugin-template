@@ -157,6 +157,9 @@ endfunction()
 
 function(clap_wrapper_builder_product_target_name INDEX OUTPUT_NAME OUT_VAR)
     string(MAKE_C_IDENTIFIER "${OUTPUT_NAME}" product_name_safe)
+    # Product display names are user-facing and not guaranteed to be unique after
+    # CMake identifier sanitization. Keep the metadata order in target names so
+    # two products cannot collapse into the same wrapper target.
     set(${OUT_VAR} "${PLUGIN_NAME_SAFE}_product_${INDEX}_${product_name_safe}" PARENT_SCOPE)
 endfunction()
 
@@ -244,6 +247,8 @@ set(STANDALONE_TARGETS)
 if(CLAP_WRAPPER_BUILDER_BUILD_STANDALONE)
     message(STATUS "  Standalone Enabled: ON")
     set(STANDALONE_CONFIGURATIONS)
+    # Standalone hosts load exactly one CLAP plugin ID, so each product needs its
+    # own app target even when all products come from the same static library.
     foreach(PRODUCT_INDEX RANGE 0 ${PRODUCT_LAST_INDEX})
         clap_wrapper_builder_product_output_name(${PRODUCT_INDEX} PRODUCT_OUTPUT_NAME)
         clap_wrapper_builder_product_value(${PRODUCT_INDEX} "PLUGIN_ID" PRODUCT_PLUGIN_ID)
@@ -271,6 +276,9 @@ endif()
 
 set(AUV2_PRODUCT_TARGETS)
 if(APPLE AND CLAP_WRAPPER_BUILDER_BUILD_AUV2)
+    # AUv2 discovery is keyed by type/manufacturer/subtype metadata in each
+    # component bundle. A single multi-product component cannot represent
+    # distinct AUv2 identities, so create one module target per product.
     foreach(PRODUCT_INDEX RANGE 0 ${PRODUCT_LAST_INDEX})
         clap_wrapper_builder_product_output_name(${PRODUCT_INDEX} PRODUCT_OUTPUT_NAME)
         clap_wrapper_builder_product_value(${PRODUCT_INDEX} "AUV2_TYPE" PRODUCT_AUV2_TYPE)
