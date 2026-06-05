@@ -72,18 +72,32 @@ pub(crate) fn validate_disabled_rules(validation: &ValidationMetadata) -> Result
     Ok(())
 }
 
-pub(crate) fn evaluate_bundle_checks(
-    schemas: &[PluginSchema],
-    metadata: &PluginMetadata,
-    validation: &ValidationMetadata,
-    location: &Path,
-    platform: Platform,
-    targets: &[ValidateTarget],
-    clap_bundle: &Path,
-    vst3_bundle: &Path,
-    au_bundle: &Path,
-    standalone_artifact: &Path,
-) -> Vec<CheckResult> {
+pub(crate) struct BundleCheckInputs<'a> {
+    pub(crate) schemas: &'a [PluginSchema],
+    pub(crate) metadata: &'a PluginMetadata,
+    pub(crate) validation: &'a ValidationMetadata,
+    pub(crate) location: &'a Path,
+    pub(crate) platform: Platform,
+    pub(crate) targets: &'a [ValidateTarget],
+    pub(crate) clap_bundle: &'a Path,
+    pub(crate) vst3_bundle: &'a Path,
+    pub(crate) au_bundle: &'a Path,
+    pub(crate) standalone_artifact: &'a Path,
+}
+
+pub(crate) fn evaluate_bundle_checks(input: BundleCheckInputs<'_>) -> Vec<CheckResult> {
+    let BundleCheckInputs {
+        schemas,
+        metadata,
+        validation,
+        location,
+        platform,
+        targets,
+        clap_bundle,
+        vst3_bundle,
+        au_bundle,
+        standalone_artifact,
+    } = input;
     let subject = CheckSubject::bundle(metadata);
     let mut results = Vec::new();
 
@@ -1047,11 +1061,13 @@ fn source_metadata_single_source_violations(
                 &mut violations,
                 &subject,
                 location,
-                "src-plugin/src/plugin.rs",
-                plugin_rs,
-                token,
-                RULE_SOURCE_METADATA_SINGLE_SOURCE,
-                "Read descriptor identity from build-script env vars generated from package.metadata.wrac.",
+                SourceTokenCheck {
+                    file_label: "src-plugin/src/plugin.rs",
+                    source: plugin_rs,
+                    token,
+                    rule_id: RULE_SOURCE_METADATA_SINGLE_SOURCE,
+                    fix: "Read descriptor identity from build-script env vars generated from package.metadata.wrac.",
+                },
             );
         }
     }
@@ -1068,11 +1084,13 @@ fn source_metadata_single_source_violations(
                 &mut violations,
                 &subject,
                 location,
-                "src-plugin/build.rs",
-                build_rs,
-                token,
-                RULE_SOURCE_METADATA_SINGLE_SOURCE,
-                "Emit descriptor identity env vars from package.metadata.wrac in build.rs.",
+                SourceTokenCheck {
+                    file_label: "src-plugin/build.rs",
+                    source: build_rs,
+                    token,
+                    rule_id: RULE_SOURCE_METADATA_SINGLE_SOURCE,
+                    fix: "Emit descriptor identity env vars from package.metadata.wrac in build.rs.",
+                },
             );
         }
     }
@@ -1088,11 +1106,13 @@ fn source_metadata_single_source_violations(
                 &mut violations,
                 &subject,
                 location,
-                "src-gui/vite.config.ts",
-                vite_config,
-                token,
-                RULE_SOURCE_METADATA_SINGLE_SOURCE,
-                "Inject frontend identity from src-plugin/Cargo.toml instead of hard-coding it.",
+                SourceTokenCheck {
+                    file_label: "src-gui/vite.config.ts",
+                    source: vite_config,
+                    token,
+                    rule_id: RULE_SOURCE_METADATA_SINGLE_SOURCE,
+                    fix: "Inject frontend identity from src-plugin/Cargo.toml instead of hard-coding it.",
+                },
             );
         }
     }
@@ -1101,11 +1121,13 @@ fn source_metadata_single_source_violations(
             &mut violations,
             &subject,
             location,
-            "src-gui/src/main.ts",
-            frontend_main,
-            "__WRAC_PLUGIN_METADATA__",
-            RULE_SOURCE_METADATA_SINGLE_SOURCE,
-            "Render frontend identity from metadata injected by Vite.",
+            SourceTokenCheck {
+                file_label: "src-gui/src/main.ts",
+                source: frontend_main,
+                token: "__WRAC_PLUGIN_METADATA__",
+                rule_id: RULE_SOURCE_METADATA_SINGLE_SOURCE,
+                fix: "Render frontend identity from metadata injected by Vite.",
+            },
         );
     }
 
@@ -1179,22 +1201,26 @@ fn require_source_contains(
     violations: &mut Vec<RuleViolation>,
     subject: &CheckSubject,
     location: &Path,
-    file_label: &'static str,
-    source: &str,
-    token: &'static str,
-    rule_id: &'static str,
-    fix: &'static str,
+    check: SourceTokenCheck<'_>,
 ) {
-    if !source.contains(token) {
+    if !check.source.contains(check.token) {
         violations.push(RuleViolation {
             plugin_id: subject.plugin_id.clone(),
             plugin_name: subject.plugin_name.clone(),
             location: location.to_path_buf(),
-            rule_id,
-            message: format!("{file_label} must contain `{token}`."),
-            fix,
+            rule_id: check.rule_id,
+            message: format!("{} must contain `{}`.", check.file_label, check.token),
+            fix: check.fix,
         });
     }
+}
+
+struct SourceTokenCheck<'a> {
+    file_label: &'static str,
+    source: &'a str,
+    token: &'static str,
+    rule_id: &'static str,
+    fix: &'static str,
 }
 
 fn read_files_with_extension(root: &Path, extension: &str) -> Vec<String> {
@@ -1526,12 +1552,14 @@ fn check_vst3_info_plist(
         violations,
         subject,
         plist_path,
-        &dict,
-        "VST3 Info.plist",
-        "CFBundleExecutable",
-        &metadata.bundle_name,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "VST3 Info.plist",
+            key: "CFBundleExecutable",
+            expected: &metadata.bundle_name,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_bundle_executable_exists(
         violations,
@@ -1545,34 +1573,40 @@ fn check_vst3_info_plist(
         violations,
         subject,
         plist_path,
-        &dict,
-        "VST3 Info.plist",
-        "CFBundleName",
-        &metadata.bundle_name,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "VST3 Info.plist",
+            key: "CFBundleName",
+            expected: &metadata.bundle_name,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "VST3 Info.plist",
-        "CFBundleShortVersionString",
-        &metadata.version,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "VST3 Info.plist",
+            key: "CFBundleShortVersionString",
+            expected: &metadata.version,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "VST3 Info.plist",
-        "CFBundleVersion",
-        &metadata.version,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "VST3 Info.plist",
+            key: "CFBundleVersion",
+            expected: &metadata.version,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep VST3 bundle metadata generated from package.metadata.wrac.",
+        },
     );
 }
 
@@ -1590,12 +1624,14 @@ fn check_au_info_plist(
         violations,
         subject,
         plist_path,
-        &dict,
-        "AU Info.plist",
-        "CFBundleExecutable",
-        &metadata.bundle_name,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AU bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "AU Info.plist",
+            key: "CFBundleExecutable",
+            expected: &metadata.bundle_name,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AU bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_bundle_executable_exists(
         violations,
@@ -1609,45 +1645,53 @@ fn check_au_info_plist(
         violations,
         subject,
         plist_path,
-        &dict,
-        "AU Info.plist",
-        "CFBundleName",
-        &metadata.bundle_name,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AU bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "AU Info.plist",
+            key: "CFBundleName",
+            expected: &metadata.bundle_name,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AU bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "AU Info.plist",
-        "CFBundleShortVersionString",
-        &metadata.version,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AU bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "AU Info.plist",
+            key: "CFBundleShortVersionString",
+            expected: &metadata.version,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AU bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "AU Info.plist",
-        "CFBundleVersion",
-        &metadata.version,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AU bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "AU Info.plist",
+            key: "CFBundleVersion",
+            expected: &metadata.version,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AU bundle metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_bool_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "AU Info.plist",
-        "NSHighResolutionCapable",
-        true,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AU bundle metadata generated from package.metadata.wrac.",
+        PlistBoolCheck {
+            dict: &dict,
+            section: "AU Info.plist",
+            key: "NSHighResolutionCapable",
+            expected: true,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AU bundle metadata generated from package.metadata.wrac.",
+        },
     );
 
     let components = dict.get("AudioComponents").and_then(plist::Value::as_array);
@@ -1669,56 +1713,66 @@ fn check_au_info_plist(
         violations,
         subject,
         plist_path,
-        component,
-        "AU AudioComponents[0]",
-        "manufacturer",
-        &metadata.auv2_manufacturer_code,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AUv2 manufacturer metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: component,
+            section: "AU AudioComponents[0]",
+            key: "manufacturer",
+            expected: &metadata.auv2_manufacturer_code,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AUv2 manufacturer metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        component,
-        "AU AudioComponents[0]",
-        "type",
-        &primary.auv2_type,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AUv2 type metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: component,
+            section: "AU AudioComponents[0]",
+            key: "type",
+            expected: &primary.auv2_type,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AUv2 type metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        component,
-        "AU AudioComponents[0]",
-        "subtype",
-        &primary.auv2_subtype,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AUv2 subtype metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: component,
+            section: "AU AudioComponents[0]",
+            key: "subtype",
+            expected: &primary.auv2_subtype,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AUv2 subtype metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        component,
-        "AU AudioComponents[0]",
-        "name",
-        &format!("{}: {}", metadata.company_name, primary.plugin_name),
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AUv2 display metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: component,
+            section: "AU AudioComponents[0]",
+            key: "name",
+            expected: &format!("{}: {}", metadata.company_name, primary.plugin_name),
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AUv2 display metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_integer_for_rule(
         violations,
         subject,
         plist_path,
-        component,
-        "AU AudioComponents[0]",
-        "version",
-        auv2_encoded_version(&metadata.version),
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep AUv2 version metadata generated from the package version.",
+        PlistIntegerCheck {
+            dict: component,
+            section: "AU AudioComponents[0]",
+            key: "version",
+            expected: auv2_encoded_version(&metadata.version),
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep AUv2 version metadata generated from the package version.",
+        },
     );
 }
 
@@ -1736,12 +1790,14 @@ fn check_standalone_info_plist(
         violations,
         subject,
         plist_path,
-        &dict,
-        "Standalone Info.plist",
-        "CFBundleExecutable",
-        &metadata.standalone_name,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep standalone app metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "Standalone Info.plist",
+            key: "CFBundleExecutable",
+            expected: &metadata.standalone_name,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep standalone app metadata generated from package.metadata.wrac.",
+        },
     );
     check_bundle_executable_exists(
         violations,
@@ -1755,34 +1811,40 @@ fn check_standalone_info_plist(
         violations,
         subject,
         plist_path,
-        &dict,
-        "Standalone Info.plist",
-        "CFBundleName",
-        &metadata.standalone_name,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep standalone app metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "Standalone Info.plist",
+            key: "CFBundleName",
+            expected: &metadata.standalone_name,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep standalone app metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "Standalone Info.plist",
-        "CFBundleShortVersionString",
-        &metadata.version,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep standalone app metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "Standalone Info.plist",
+            key: "CFBundleShortVersionString",
+            expected: &metadata.version,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep standalone app metadata generated from package.metadata.wrac.",
+        },
     );
     check_plist_string_for_rule(
         violations,
         subject,
         plist_path,
-        &dict,
-        "Standalone Info.plist",
-        "CFBundleVersion",
-        &metadata.version,
-        RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
-        "Keep standalone app metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict: &dict,
+            section: "Standalone Info.plist",
+            key: "CFBundleVersion",
+            expected: &metadata.version,
+            rule_id: RULE_MACOS_WRAPPER_INFO_PLISTS_MATCH_MANIFEST,
+            fix: "Keep standalone app metadata generated from package.metadata.wrac.",
+        },
     );
 }
 
@@ -1798,12 +1860,14 @@ fn check_plist_string(
         violations,
         subject,
         plist_path,
-        dict,
-        "CLAP Info.plist",
-        key,
-        expected,
-        RULE_MACOS_CLAP_INFO_PLIST_MATCHES_MANIFEST,
-        "Keep CLAP bundle metadata generated from package.metadata.wrac.",
+        PlistStringCheck {
+            dict,
+            section: "CLAP Info.plist",
+            key,
+            expected,
+            rule_id: RULE_MACOS_CLAP_INFO_PLIST_MATCHES_MANIFEST,
+            fix: "Keep CLAP bundle metadata generated from package.metadata.wrac.",
+        },
     );
 }
 
@@ -1811,27 +1875,34 @@ fn check_plist_string_for_rule(
     violations: &mut Vec<RuleViolation>,
     subject: &CheckSubject,
     plist_path: &Path,
-    dict: &plist::Dictionary,
-    section: &'static str,
-    key: &'static str,
-    expected: &str,
-    rule_id: &'static str,
-    fix: &'static str,
+    check: PlistStringCheck<'_>,
 ) {
-    let actual = dict.get(key).and_then(plist::Value::as_string);
-    if actual != Some(expected) {
+    let actual = check.dict.get(check.key).and_then(plist::Value::as_string);
+    if actual != Some(check.expected) {
         violations.push(RuleViolation {
             plugin_id: subject.plugin_id.clone(),
             plugin_name: subject.plugin_name.clone(),
             location: plist_path.to_path_buf(),
-            rule_id,
+            rule_id: check.rule_id,
             message: format!(
-                "{section} {key} does not match manifest metadata. expected=\"{expected}\" actual=\"{}\"",
+                "{} {} does not match manifest metadata. expected=\"{}\" actual=\"{}\"",
+                check.section,
+                check.key,
+                check.expected,
                 actual.unwrap_or("<missing or non-string>")
             ),
-            fix,
+            fix: check.fix,
         });
     }
+}
+
+struct PlistStringCheck<'a> {
+    dict: &'a plist::Dictionary,
+    section: &'static str,
+    key: &'static str,
+    expected: &'a str,
+    rule_id: &'static str,
+    fix: &'static str,
 }
 
 fn check_plist_bool(
@@ -1846,12 +1917,14 @@ fn check_plist_bool(
         violations,
         subject,
         plist_path,
-        dict,
-        "CLAP Info.plist",
-        key,
-        expected,
-        RULE_MACOS_CLAP_INFO_PLIST_MATCHES_MANIFEST,
-        "Keep CLAP bundle metadata generated from package.metadata.wrac.",
+        PlistBoolCheck {
+            dict,
+            section: "CLAP Info.plist",
+            key,
+            expected,
+            rule_id: RULE_MACOS_CLAP_INFO_PLIST_MATCHES_MANIFEST,
+            fix: "Keep CLAP bundle metadata generated from package.metadata.wrac.",
+        },
     );
 }
 
@@ -1859,29 +1932,36 @@ fn check_plist_bool_for_rule(
     violations: &mut Vec<RuleViolation>,
     subject: &CheckSubject,
     plist_path: &Path,
-    dict: &plist::Dictionary,
+    check: PlistBoolCheck<'_>,
+) {
+    let actual = check.dict.get(check.key).and_then(plist::Value::as_boolean);
+    if actual != Some(check.expected) {
+        violations.push(RuleViolation {
+            plugin_id: subject.plugin_id.clone(),
+            plugin_name: subject.plugin_name.clone(),
+            location: plist_path.to_path_buf(),
+            rule_id: check.rule_id,
+            message: format!(
+                "{} {} does not match manifest metadata. expected={} actual={}",
+                check.section,
+                check.key,
+                check.expected,
+                actual
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<missing or non-boolean>".to_string())
+            ),
+            fix: check.fix,
+        });
+    }
+}
+
+struct PlistBoolCheck<'a> {
+    dict: &'a plist::Dictionary,
     section: &'static str,
     key: &'static str,
     expected: bool,
     rule_id: &'static str,
     fix: &'static str,
-) {
-    let actual = dict.get(key).and_then(plist::Value::as_boolean);
-    if actual != Some(expected) {
-        violations.push(RuleViolation {
-            plugin_id: subject.plugin_id.clone(),
-            plugin_name: subject.plugin_name.clone(),
-            location: plist_path.to_path_buf(),
-            rule_id,
-            message: format!(
-                "{section} {key} does not match manifest metadata. expected={expected} actual={}",
-                actual
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<missing or non-boolean>".to_string())
-            ),
-            fix,
-        });
-    }
 }
 
 fn check_bundle_executable_exists(
@@ -1914,29 +1994,39 @@ fn check_plist_integer_for_rule(
     violations: &mut Vec<RuleViolation>,
     subject: &CheckSubject,
     plist_path: &Path,
-    dict: &plist::Dictionary,
+    check: PlistIntegerCheck<'_>,
+) {
+    let actual = check
+        .dict
+        .get(check.key)
+        .and_then(plist::Value::as_signed_integer);
+    if actual != Some(check.expected) {
+        violations.push(RuleViolation {
+            plugin_id: subject.plugin_id.clone(),
+            plugin_name: subject.plugin_name.clone(),
+            location: plist_path.to_path_buf(),
+            rule_id: check.rule_id,
+            message: format!(
+                "{} {} does not match manifest metadata. expected={} actual={}",
+                check.section,
+                check.key,
+                check.expected,
+                actual
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<missing or non-integer>".to_string())
+            ),
+            fix: check.fix,
+        });
+    }
+}
+
+struct PlistIntegerCheck<'a> {
+    dict: &'a plist::Dictionary,
     section: &'static str,
     key: &'static str,
     expected: i64,
     rule_id: &'static str,
     fix: &'static str,
-) {
-    let actual = dict.get(key).and_then(plist::Value::as_signed_integer);
-    if actual != Some(expected) {
-        violations.push(RuleViolation {
-            plugin_id: subject.plugin_id.clone(),
-            plugin_name: subject.plugin_name.clone(),
-            location: plist_path.to_path_buf(),
-            rule_id,
-            message: format!(
-                "{section} {key} does not match manifest metadata. expected={expected} actual={}",
-                actual
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<missing or non-integer>".to_string())
-            ),
-            fix,
-        });
-    }
 }
 
 fn read_plist_dict(

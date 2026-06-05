@@ -18,18 +18,18 @@ pub(crate) fn validate_wrac_rules(
     // when a format validator would also reject the artifact later.
     let clap = ctx.clap_bundle(profile);
     let schemas = unsafe { clap_schema::read_clap_schemas(ctx, profile, &clap)? };
-    let mut results = checks::evaluate_bundle_checks(
-        &schemas,
-        &ctx.metadata,
-        &ctx.metadata.validation,
-        &ctx.plugin_manifest(),
-        ctx.platform,
+    let mut results = checks::evaluate_bundle_checks(checks::BundleCheckInputs {
+        schemas: &schemas,
+        metadata: &ctx.metadata,
+        validation: &ctx.metadata.validation,
+        location: &ctx.plugin_manifest(),
+        platform: ctx.platform,
         targets,
-        &clap,
-        &ctx.vst3_bundle(profile),
-        &ctx.au_bundle(profile),
-        &ctx.standalone_artifact(profile),
-    );
+        clap_bundle: &clap,
+        vst3_bundle: &ctx.vst3_bundle(profile),
+        au_bundle: &ctx.au_bundle(profile),
+        standalone_artifact: &ctx.standalone_artifact(profile),
+    });
     results.extend(checks::evaluate_source_checks(
         &schemas,
         &ctx.metadata,
