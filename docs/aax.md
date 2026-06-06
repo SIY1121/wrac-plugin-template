@@ -61,8 +61,10 @@ cargo xtask install --target=aax --scope=system
 cargo xtask validate --target=aax
 ```
 
-The validator runs selected DSH `runtest` commands by test ID and saves official
-JSON results under `target/wrac-plugins/<package>/wrac/validation/aax/`.
+The validator runs the selected AAX Validator tests by test ID and saves official
+JSON results under `target/wrac-plugins/<package>/wrac/validation/aax/`. macOS
+drives DSH directly; Windows uses Avid's bundled DTT runner because that is the
+package's documented automation layer for DigiShell.
 `xtask` fails when any selected test reports a non-pass `result_status`.
 
 The local validation target intentionally skips:

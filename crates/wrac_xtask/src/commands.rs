@@ -818,15 +818,14 @@ fn validate_targets(
 }
 
 fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
-    let dsh = ensure_aax_validator_dsh(ctx)?;
     let results_dir = ctx.wrac_dir().join("validation").join("aax");
     // A fresh directory prevents a previous pass result from masking a missing
-    // `saveresult` output if DSH exits early or changes a result reference.
+    // validator output if DSH exits early or changes a result reference.
     remove_if_exists(&results_dir)?;
     fs::create_dir_all(&results_dir)?;
     let aax = stage_aax_for_validator(&results_dir, aax)?;
 
-    println!("Running AAX validator/DSH for: {}", aax.display());
+    println!("Running AAX validator for: {}", aax.display());
     println!(
         "AAX validation runs {} selected validator tests.",
         AAX_VALIDATOR_REQUIRED_TESTS.len()
@@ -835,6 +834,18 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
         println!("Skipping {test_id}: {reason}.");
     }
     println!();
+
+    if ctx.platform == Platform::Windows {
+        run_aax_validator_dtt(ctx, &aax, &results_dir)?;
+    } else {
+        run_aax_validator_dsh(ctx, &aax, &results_dir)?;
+    }
+
+    assert_aax_validator_results(&results_dir)
+}
+
+fn run_aax_validator_dsh(ctx: &Context, aax: &Path, results_dir: &Path) -> Result<()> {
+    let dsh = ensure_aax_validator_dsh(ctx)?;
     println!("========== Running command ==========");
     println!("$ {}", dsh.display());
 
@@ -849,34 +860,32 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
             .stdin
             .take()
             .ok_or("failed to open DSH stdin for AAX validation")?;
-        write_dsh_command(&mut stdin, ctx.platform, "load_dish aaxval")?;
+        write_dsh_command(&mut stdin, "load_dish aaxval")?;
         for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
             let result_ref = format!("r{}", index + 1);
-            let result_path = aax_validator_result_path(&results_dir, index, test_id);
+            let result_path = aax_validator_result_path(results_dir, index, test_id);
             // The aaxval dish has no documented per-test exclude list for `runtests`.
             // Running explicit `runtest` commands keeps the CI contract stable as
             // Avid updates collections, while still using DSH's own JSON result writer.
             write_dsh_command(
                 &mut stdin,
-                ctx.platform,
                 format!(
                     "runtest {{test: {test_id}, path: {}, stringformat: json, detail: min}}",
-                    dsh_string(&aax)?
+                    dsh_string(aax)?
                 ),
             )?;
             write_dsh_command(
                 &mut stdin,
-                ctx.platform,
                 format!(
                     "saveresult {{result_ref: {result_ref}, result_path: {}, stringformat: json}}",
                     dsh_string(&result_path)?
                 ),
             )?;
         }
-        write_dsh_command(&mut stdin, ctx.platform, "quit")?;
+        write_dsh_command(&mut stdin, "quit")?;
     }
 
-    let output = wait_for_aax_validator_dsh(child, aax_validator_dsh_timeout()?)?;
+    let output = wait_for_aax_validator_process(child, aax_validator_dsh_timeout()?)?;
     let stdout_path = results_dir.join("dsh-stdout.log");
     let stderr_path = results_dir.join("dsh-stderr.log");
     fs::write(&stdout_path, &output.stdout)?;
@@ -896,12 +905,111 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
         .into());
     }
 
+    Ok(())
+}
+
+fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Result<()> {
+    let dtt = ensure_aax_validator_dtt(ctx)?;
+    println!("========== Running command ==========");
+    println!("$ {}", dtt.display());
+
+    for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
+        let test_dir =
+            results_dir
+                .join("dtt")
+                .join(format!("{:02}-{}", index + 1, test_id.replace('.', "_")));
+        fs::create_dir_all(&test_dir)?;
+
+        // Avid ships DTT as the automatable scripting layer for DigiShell. The
+        // Windows DSH process can launch in hosted CI while ignoring direct stdin,
+        // so Windows validation goes through DTT instead of treating DSH like a
+        // plain pipe-oriented CLI.
+        let child = Command::new(&dtt)
+            .arg("--script")
+            .arg("ValidatorRunAllTests")
+            .arg("--no_pref_delete")
+            .arg("--no_move_options")
+            .arg("--disable_digitrace")
+            .arg("--arg")
+            .arg(format!("pi_path={}", aax.display()))
+            .arg("--arg")
+            .arg(format!("out_path={}", test_dir.display()))
+            .arg("--arg")
+            .arg("result_format=json")
+            .arg("--arg")
+            .arg(format!("test_id={test_id}"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(dtt.parent().unwrap_or(&ctx.root))
+            .spawn()?;
+        let output = wait_for_aax_validator_process(child, aax_validator_dsh_timeout()?)?;
+        let stdout_path = test_dir.join("dtt-stdout.log");
+        let stderr_path = test_dir.join("dtt-stderr.log");
+        fs::write(&stdout_path, &output.stdout)?;
+        fs::write(&stderr_path, &output.stderr)?;
+
+        if !output.status.success() {
+            print_aax_validator_output(&output.stdout, &output.stderr);
+            return Err(format!(
+                "AAX validator/DTT failed while running {test_id}; see {}",
+                stdout_path.display()
+            )
+            .into());
+        }
+
+        let result_path = aax_validator_result_path(results_dir, index, test_id);
+        let dtt_result = find_aax_validator_dtt_result(&test_dir, test_id)?;
+        fs::copy(&dtt_result, &result_path).map_err(|err| {
+            format!(
+                "failed to copy AAX validator result {} to {}: {err}",
+                dtt_result.display(),
+                result_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn find_aax_validator_dtt_result(test_dir: &Path, test_id: &str) -> Result<PathBuf> {
+    let result_dir = test_dir.join("run_all_tests_result");
+    let expected_prefix = format!("{test_id}__");
+    let mut matches = Vec::new();
+    for entry in fs::read_dir(&result_dir).map_err(|err| {
+        format!(
+            "failed to read AAX validator DTT result directory {}: {err}",
+            result_dir.display()
+        )
+    })? {
+        let path = entry?.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with(&expected_prefix)
+            && path.extension().is_some_and(|ext| ext == "json")
+        {
+            matches.push(path);
+        }
+    }
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(format!(
+            "AAX validator/DTT did not write a JSON result for {test_id} under {}",
+            result_dir.display()
+        )
+        .into()),
+        _ => Err(format!(
+            "AAX validator/DTT wrote multiple JSON results for {test_id} under {}",
+            result_dir.display()
+        )
+        .into()),
+    }
+}
+
+fn assert_aax_validator_results(results_dir: &Path) -> Result<()> {
     let mut failed = Vec::new();
     for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
-        let result_path = aax_validator_result_path(&results_dir, index, test_id);
-        if !result_path.exists() {
-            print_aax_validator_output(&output.stdout, &output.stderr);
-        }
+        let result_path = aax_validator_result_path(results_dir, index, test_id);
         let status = aax_validator_result_status(&result_path)?;
         if status == "E_COMPLETED_PASS" {
             println!("AAX validator PASS: {test_id}");
@@ -915,7 +1023,7 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
     }
     if !failed.is_empty() {
         return Err(format!(
-            "AAX validator/DSH reported failed validation results: {}",
+            "AAX validator reported failed validation results: {}",
             failed.join(", ")
         )
         .into());
@@ -923,23 +1031,13 @@ fn run_aax_validator(ctx: &Context, aax: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_dsh_command(
-    stdin: &mut impl Write,
-    platform: Platform,
-    command: impl AsRef<str>,
-) -> Result<()> {
+fn write_dsh_command(stdin: &mut impl Write, command: impl AsRef<str>) -> Result<()> {
     let command = command.as_ref();
-    if platform == Platform::Windows {
-        // Windows DSH is a native console executable. CRLF avoids leaving its stdin
-        // parser waiting for a line ending that Git Bash/Rust would otherwise not send.
-        write!(stdin, "{command}\r\n")?;
-    } else {
-        writeln!(stdin, "{command}")?;
-    }
+    writeln!(stdin, "{command}")?;
     Ok(())
 }
 
-fn wait_for_aax_validator_dsh(mut child: Child, timeout: Duration) -> Result<Output> {
+fn wait_for_aax_validator_process(mut child: Child, timeout: Duration) -> Result<Output> {
     let started_at = Instant::now();
     loop {
         if child.try_wait()?.is_some() {
@@ -950,7 +1048,7 @@ fn wait_for_aax_validator_dsh(mut child: Child, timeout: Duration) -> Result<Out
             let output = child.wait_with_output()?;
             print_aax_validator_output(&output.stdout, &output.stderr);
             return Err(format!(
-                "AAX validator/DSH timed out after {} seconds",
+                "AAX validator process timed out after {} seconds",
                 timeout.as_secs()
             )
             .into());
@@ -988,12 +1086,12 @@ fn stage_aax_for_validator(results_dir: &Path, aax: &Path) -> Result<PathBuf> {
 fn print_aax_validator_output(stdout: &[u8], stderr: &[u8]) {
     let stdout = String::from_utf8_lossy(stdout);
     if !stdout.trim().is_empty() {
-        println!("========== AAX validator DSH stdout ==========");
+        println!("========== AAX validator stdout ==========");
         println!("{stdout}");
     }
     let stderr = String::from_utf8_lossy(stderr);
     if !stderr.trim().is_empty() {
-        println!("========== AAX validator DSH stderr ==========");
+        println!("========== AAX validator stderr ==========");
         println!("{stderr}");
     }
 }
@@ -1063,6 +1161,13 @@ fn ensure_aax_validator_dsh(ctx: &Context) -> Result<PathBuf> {
     Ok(dsh)
 }
 
+fn ensure_aax_validator_dtt(ctx: &Context) -> Result<PathBuf> {
+    let root = aax_validator_dsh_root(ctx)?;
+    let dtt = aax_validator_dtt_runner(&root, ctx.platform)?;
+    ensure_exists(&dtt, "AAX validator DTT runner")?;
+    Ok(dtt)
+}
+
 fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
     if let Some(root) = env::var_os("AAX_VALIDATOR_DSH_ROOT").map(PathBuf::from) {
         return Ok(root);
@@ -1114,6 +1219,7 @@ fn aax_validator_dsh_archive() -> Result<PathBuf> {
     for name in [
         "aax-validator-dsh-2024-6-0-138bab0d-mac-arm64.tar.gz",
         "aax-validator-dsh-2024-6-0-138bab0d-mac-x64.tar.gz",
+        "aax-validator-dsh-2024-6-0-dc68c2dd-win-x86_64.zip",
     ] {
         let archive = downloads.join(name);
         if archive.exists() {
@@ -1154,6 +1260,36 @@ fn aax_validator_dsh_executable(root: &Path, platform: Platform) -> Result<PathB
     }
     Err(format!(
         "AAX validator DSH executable not found under {}",
+        root.display()
+    )
+    .into())
+}
+
+fn aax_validator_dtt_runner(root: &Path, platform: Platform) -> Result<PathBuf> {
+    let runner = if platform == Platform::Windows {
+        "run_test.bat"
+    } else {
+        "run_test.command"
+    };
+    for candidate in [
+        root.join("DigiShell").join("DTT").join(runner),
+        root.join("DTT").join(runner),
+        root.join("DigiShell")
+            .join("AAXValidatorResources")
+            .join("Tools")
+            .join("DTT")
+            .join(runner),
+        root.join("AAXValidatorResources")
+            .join("Tools")
+            .join("DTT")
+            .join(runner),
+    ] {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "AAX validator DTT runner not found under {}",
         root.display()
     )
     .into())
