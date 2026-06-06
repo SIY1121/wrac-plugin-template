@@ -58,6 +58,7 @@ Edit the commented `[package.metadata.wrac]` and `[[package.metadata.wrac.plugin
 > **Important:** The plugin ID must be globally unique. It cannot be changed once published.
 > AUv2 `auv2_type`, `auv2_subtype`, and `auv2_manufacturer_code` must each be exactly 4 ASCII bytes.
 > `clap_features` must match the plugin's real audio/MIDI behavior because CLAP hosts read it directly.
+> `supported_formats` is the product policy used by default `xtask` build/install/validate commands.
 > `vst3_subcategories` controls VST3 host browser categories; use Steinberg-style `|`-separated values such as `Fx|Dynamics`.
 > `vst3_component_id` must be a stable UUID. Generate it once before release and never change it for the same product.
 > `aax_manufacturer_id`, `aax_product_id`, and each AAX stem config `plugin_id` must be stable 4-byte ASCII IDs.
@@ -105,13 +106,14 @@ cd /path/to/my_plugin
 cargo xtask install
 ```
 
-`cargo xtask install` builds the selected plugin formats before installing them.
+`cargo xtask install` expands the selected plugin formats into a task graph before installing them.
 Use `-p/--package` with the Cargo package name when the workspace contains multiple WRAC plugin packages.
-`cargo xtask install` installs to user-local paths by default.
+Default plugin formats come from `package.metadata.wrac.supported_formats`.
+`cargo xtask install --scope=default` installs CLAP/VST3/AU to user-local paths and AAX to the system-wide Avid plugin folder.
 Use `cargo xtask install --scope=system` for hosts that only scan system-wide plugin folders.
 The `--target` option accepts `clap`, `vst3`, `au`, and `aax` as comma-separated values.
-AAX is not included in the default target set; request it explicitly with `--target=aax`.
-On macOS and Windows, AAX installs to the system-wide Avid plugin folder, so use `--scope=system`.
+Explicit targets must be listed in `supported_formats`.
+Use `--dry-run` to inspect the task graph and dependency order without building or installing.
 
 ### 5. Verify
 

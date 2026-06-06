@@ -1,14 +1,53 @@
 use clap::ValueEnum;
+use serde::Deserialize;
 
 use crate::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 pub(crate) enum Target {
     Clap,
     Vst3,
     Au,
     Aax,
     Standalone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PluginFormat {
+    Clap,
+    Vst3,
+    Au,
+    Aax,
+}
+
+impl PluginFormat {
+    pub(crate) fn display(self) -> &'static str {
+        match self {
+            Self::Clap => "CLAP",
+            Self::Vst3 => "VST3",
+            Self::Au => "AU",
+            Self::Aax => "AAX",
+        }
+    }
+
+    pub(crate) fn target(self) -> Target {
+        match self {
+            Self::Clap => Target::Clap,
+            Self::Vst3 => Target::Vst3,
+            Self::Au => Target::Au,
+            Self::Aax => Target::Aax,
+        }
+    }
+
+    pub(crate) fn validate_target(self) -> ValidateTarget {
+        match self {
+            Self::Clap => ValidateTarget::Clap,
+            Self::Vst3 => ValidateTarget::Vst3,
+            Self::Au => ValidateTarget::Au,
+            Self::Aax => ValidateTarget::Aax,
+        }
+    }
 }
 
 impl Target {
@@ -27,7 +66,7 @@ impl Target {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 pub(crate) enum PluginTarget {
     Clap,
     Vst3,
@@ -46,16 +85,20 @@ impl PluginTarget {
     }
 
     pub(crate) fn target(self) -> Target {
+        self.format().target()
+    }
+
+    pub(crate) fn format(self) -> PluginFormat {
         match self {
-            Self::Clap => Target::Clap,
-            Self::Vst3 => Target::Vst3,
-            Self::Au => Target::Au,
-            Self::Aax => Target::Aax,
+            Self::Clap => PluginFormat::Clap,
+            Self::Vst3 => PluginFormat::Vst3,
+            Self::Au => PluginFormat::Au,
+            Self::Aax => PluginFormat::Aax,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 pub(crate) enum ValidateTarget {
     Clap,
     Vst3,
@@ -74,16 +117,20 @@ impl ValidateTarget {
     }
 
     pub(crate) fn target(self) -> Target {
+        self.format().target()
+    }
+
+    pub(crate) fn format(self) -> PluginFormat {
         match self {
-            Self::Clap => Target::Clap,
-            Self::Vst3 => Target::Vst3,
-            Self::Au => Target::Au,
-            Self::Aax => Target::Aax,
+            Self::Clap => PluginFormat::Clap,
+            Self::Vst3 => PluginFormat::Vst3,
+            Self::Au => PluginFormat::Au,
+            Self::Aax => PluginFormat::Aax,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Platform {
     Macos,
     Windows,
@@ -138,27 +185,6 @@ impl Platform {
         }
     }
 
-    pub(crate) fn default_plugin_targets(self) -> Vec<PluginTarget> {
-        match self {
-            Self::Macos => vec![PluginTarget::Clap, PluginTarget::Vst3, PluginTarget::Au],
-            Self::Windows => vec![PluginTarget::Clap, PluginTarget::Vst3],
-            Self::Linux => vec![PluginTarget::Clap, PluginTarget::Vst3],
-        }
-    }
-
-    pub(crate) fn default_validate_targets(self) -> Vec<ValidateTarget> {
-        // validate runs external validators against already-built plugin artifacts.
-        match self {
-            Self::Macos => vec![
-                ValidateTarget::Clap,
-                ValidateTarget::Vst3,
-                ValidateTarget::Au,
-            ],
-            Self::Windows => vec![ValidateTarget::Clap, ValidateTarget::Vst3],
-            Self::Linux => vec![ValidateTarget::Clap, ValidateTarget::Vst3],
-        }
-    }
-
     pub(crate) fn cmake_generator(self) -> Option<&'static str> {
         match self {
             Self::Macos => Some("Xcode"),
@@ -195,52 +221,6 @@ pub(crate) fn resolve_build_targets(
 
     for target in &targets {
         if !platform.supports_target(*target) {
-            return Err(format!(
-                "{} is not supported on this operating system",
-                target.display()
-            )
-            .into());
-        }
-    }
-
-    Ok(dedup(targets))
-}
-
-pub(crate) fn resolve_plugin_targets(
-    platform: Platform,
-    requested: &[PluginTarget],
-) -> Result<Vec<PluginTarget>> {
-    let targets = if requested.is_empty() {
-        platform.default_plugin_targets()
-    } else {
-        requested.to_vec()
-    };
-
-    for target in &targets {
-        if !platform.supports_target(target.target()) {
-            return Err(format!(
-                "{} is not supported on this operating system",
-                target.display()
-            )
-            .into());
-        }
-    }
-
-    Ok(dedup(targets))
-}
-
-pub(crate) fn resolve_validate_targets(
-    platform: Platform,
-    requested: &[ValidateTarget],
-) -> Result<Vec<ValidateTarget>> {
-    let targets = if requested.is_empty() {
-        platform.default_validate_targets()
-    } else {
-        requested.to_vec()
-    };
-
-    for target in &targets {
-        if !platform.supports_target(target.target()) {
             return Err(format!(
                 "{} is not supported on this operating system",
                 target.display()

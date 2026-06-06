@@ -29,6 +29,9 @@ manual_url = "https://example.com/wrac-gain/manual"
 support_url = "https://example.com/support"
 description = "Simple gain plugin"
 copyright = "Copyright 2026 Your Company"
+# Product policy for plugin formats. xtask defaults use this list, while
+# explicit --target requests fail if the requested format is not declared here.
+supported_formats = ["clap", "vst3", "au", "aax"]
 
 [package.metadata.wrac.validation.disabled_rules.fender-studio-pro-generic-editor-single-knob]
 reason = "WRAC Gain is a minimal one-knob starter example. Products that support Fender Studio Pro should add a second real visible control instead of shipping this exception."

@@ -116,7 +116,9 @@ Supported plugin formats:
 | Windows | CLAP / VST3 / AAX |
 | Linux | CLAP / VST3 |
 
-AAX must be requested explicitly with `--target=aax`; it is not included in default build, install, or validate target sets. For build/debug commands, the `--target` option also accepts `standalone` as a development-only target.
+Default build, install, and validate targets come from `package.metadata.wrac.supported_formats`.
+Use `--target` to request a specific subset; explicit targets must be listed in `supported_formats`.
+For build/debug commands, the `--target` option also accepts `standalone` as a development-only target.
 
 For detailed usage:
 

@@ -1,8 +1,8 @@
 # AAX Build and Validation
 
-AAX support is available on macOS and Windows as an explicit target. It is not
-included in default build, install, or validate target sets because the AAX SDK
-and validator are private Avid downloads.
+AAX support is available on macOS and Windows when `aax` is listed in
+`package.metadata.wrac.supported_formats`. Default build, install, and validate
+commands use that metadata list; `--target=aax` requests only AAX.
 
 ## Prerequisites
 
@@ -36,6 +36,7 @@ manifest. Before shipping, set these fields to product-owned values:
 - `aax_product_id`
 - `aax_categories`
 - `aax_stem_configs`
+- `supported_formats = ["clap", "vst3", "au", "aax"]`
 
 Each AAX stem config needs a unique `plugin_id`. Keep manufacturer, product, and
 stem plugin IDs stable after release because hosts use them for plugin identity
@@ -45,16 +46,18 @@ and project recall.
 
 ```sh
 cargo xtask build --target=aax
+# or build every format declared in supported_formats:
+cargo xtask build
 ```
 
 ## Install
 
 AAX plugins install to the system-wide Avid plugin folder on macOS and Windows.
-`cargo xtask install` defaults to `--scope=user`, so AAX install commands must
-request `--scope=system`.
+With `--scope=default`, `xtask` installs AAX system-wide and CLAP/VST3/AU
+user-locally.
 
 ```sh
-cargo xtask install --target=aax --scope=system
+cargo xtask install --target=aax
 ```
 
 `cargo xtask uninstall` defaults to `--scope=all`; for AAX this resolves to the
@@ -64,6 +67,8 @@ system-wide Avid plugin folder because there is no user-local AAX install scope.
 
 ```sh
 cargo xtask validate --target=aax
+# or validate every format declared in supported_formats:
+cargo xtask validate
 ```
 
 The validator runs the selected AAX Validator tests by test ID and saves official
