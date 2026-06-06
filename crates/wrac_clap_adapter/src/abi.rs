@@ -123,7 +123,6 @@ pub(crate) struct PluginCapabilities {
     gui: bool,
     render: bool,
     tail: bool,
-    latency: bool,
 }
 
 // Safety: CLAP shares the same opaque plugin pointer across callbacks. Adapter state is
@@ -184,7 +183,6 @@ impl PluginInstance {
             gui: gui.is_some(),
             render: render.is_some(),
             tail: tail.is_some(),
-            latency: latency.is_some(),
         };
         let storage = registration.storage();
 
@@ -825,7 +823,10 @@ unsafe extern "C" fn plugin_get_extension(
             &render_extension::RENDER as *const _ as *const c_void
         } else if id == CLAP_EXT_TAIL && instance.capabilities.tail {
             &tail_extension::TAIL as *const _ as *const c_void
-        } else if id == CLAP_EXT_LATENCY && instance.capabilities.latency {
+        } else if id == CLAP_EXT_LATENCY {
+            // Some wrappers query latency unconditionally during activation. Exposing a
+            // zero-latency fallback keeps optional product support from becoming a null
+            // extension pointer at the wrapper boundary.
             &latency_extension::LATENCY as *const _ as *const c_void
         } else {
             ptr::null()
