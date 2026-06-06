@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -8,14 +9,11 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::Result;
-use crate::cli::{BuildArgs, InstallScope, UninstallScope};
+use crate::cli::{InstallScope, UninstallScope};
 use crate::context::Context;
 use crate::metadata::PluginMetadata;
 use crate::profile::BuildProfile;
-use crate::targets::{
-    Platform, PluginTarget, Target, ValidateTarget, resolve_build_targets, resolve_plugin_targets,
-    resolve_validate_targets,
-};
+use crate::targets::{Platform, PluginFormat, PluginTarget, Target, ValidateTarget};
 use crate::util::{
     common_program_files, copy_path, ensure_exists, env_value_or, home_dir, local_app_data, on_off,
     remove_if_exists, run,
@@ -25,8 +23,10 @@ use crate::validation::validate_wrac_rules;
 const CLAP_VALIDATOR_VERSION: &str = "0.3.2";
 // Keep the local AAX contract explicit instead of delegating to the validator's
 // broad `runtests` collection. `runtests` includes hardware/DSP and page-table
-// coverage that this source-built native template does not generate, so CI should
-// fail only on the concrete native tests that the generated bundle is expected to pass.
+// XML coverage that this source-built native template does not generate, so CI
+// should fail only on the concrete native tests that the generated bundle is
+// expected to pass. The skipped IDs are still logged at runtime to make that
+// boundary visible in CI without turning docs/aax.md into a validation manual.
 const AAX_VALIDATOR_REQUIRED_TESTS: &[&str] = &[
     "info.productids",
     "info.support.audiosuite",
@@ -53,65 +53,7 @@ const AAX_VALIDATOR_SKIPPED_TESTS: &[(&str, &str)] = &[
 ];
 const AAX_VALIDATOR_TIMEOUT_SECS: u64 = 15 * 60;
 
-pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
-    let profile = BuildProfile::from_release(args.release);
-    let targets = resolve_build_targets(ctx.platform, &args.target)?;
-
-    // Missing wrapper inputs surface as CMake errors after npm/cargo have already run,
-    // making the root cause hard to diagnose. Check wrapper inputs upfront only
-    // when the selected targets require a wrapper.
-    if targets.iter().any(|target| target.is_wrapper()) || targets.contains(&Target::Standalone) {
-        ensure_wrapper_inputs(
-            ctx,
-            targets.contains(&Target::Vst3),
-            targets.contains(&Target::Au),
-            targets.contains(&Target::Aax),
-        )?;
-    }
-
-    if args.clean {
-        clean(ctx)?;
-    }
-
-    build_gui(ctx)?;
-
-    let mut default_rust_plugin_built = false;
-    if targets.contains(&Target::Clap) {
-        build_rust_plugin(ctx, profile, RustPluginBuild::Default)?;
-        default_rust_plugin_built = true;
-        package_clap(ctx, profile)?;
-    }
-
-    if targets.iter().any(|target| target.is_wrapper()) {
-        // In the old WRY_OBJC_SUFFIX era, VST3 and AU each required a separate Rust
-        // staticlib so their Objective-C class names could differ per format. The current
-        // wxp/wry embeds the wry source ID into objc2's auto-generated class names, so a
-        // single staticlib can be shared by both VST3 and AU in the same product build.
-        // Do not split again unless per-format compile-time inputs are reintroduced.
-        if !default_rust_plugin_built {
-            build_rust_plugin(ctx, profile, RustPluginBuild::Default)?;
-        }
-        build_wrapper_set(
-            ctx,
-            profile,
-            WrapperBuild::Plugin {
-                vst3: targets.contains(&Target::Vst3),
-                au: targets.contains(&Target::Au),
-                aax: targets.contains(&Target::Aax),
-            },
-        )?;
-    }
-
-    if targets.contains(&Target::Standalone) {
-        build_rust_plugin(ctx, profile, RustPluginBuild::Standalone)?;
-        build_wrapper_set(ctx, profile, WrapperBuild::Standalone)?;
-    }
-
-    print_outputs(ctx, profile, &targets);
-    Ok(())
-}
-
-fn build_gui(ctx: &Context) -> Result<()> {
+pub(crate) fn build_gui(ctx: &Context) -> Result<()> {
     println!("Building GUI...");
     // build.rs embeds src-gui/dist into the plugin binary, so the frontend must be
     // finalized here first. Reversing the order risks bundling a stale or empty dist.
@@ -133,13 +75,13 @@ fn npm_command(platform: Platform) -> &'static str {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RustPluginBuild {
+pub(crate) enum RustPluginBuild {
     Default,
     Standalone,
 }
 
 impl RustPluginBuild {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Default => "default",
             Self::Standalone => "standalone",
@@ -167,7 +109,11 @@ impl RustPluginBuild {
     }
 }
 
-fn build_rust_plugin(ctx: &Context, profile: BuildProfile, build: RustPluginBuild) -> Result<()> {
+pub(crate) fn build_rust_plugin(
+    ctx: &Context,
+    profile: BuildProfile,
+    build: RustPluginBuild,
+) -> Result<()> {
     println!("Building Rust plugin ({})...", build.label());
     let mut command = Command::new("cargo");
     command
@@ -200,7 +146,7 @@ fn build_rust_plugin(ctx: &Context, profile: BuildProfile, build: RustPluginBuil
     Ok(())
 }
 
-fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
+pub(crate) fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
     println!("Packaging CLAP...");
     let bundle = ctx.clap_bundle(profile);
     remove_if_exists(&bundle)?;
@@ -242,169 +188,266 @@ fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum WrapperBuild {
-    Plugin { vst3: bool, au: bool, aax: bool },
+pub(crate) enum WrapperBuild {
+    // VST3 and AU share the same private-SDK-free wrapper configure. AAX is
+    // deliberately separate so VST3/AU builds do not require AAX_SDK_ROOT.
+    Plugins { vst3: bool, au: bool },
+    Aax,
     Standalone,
 }
 
 impl WrapperBuild {
-    fn purpose(self) -> &'static str {
+    pub(crate) fn purpose(self) -> &'static str {
         match self {
-            Self::Plugin { .. } => "wrap",
+            Self::Plugins { .. } => "wrap-plugins",
+            Self::Aax => "wrap-aax",
             Self::Standalone => "standalone",
         }
     }
 
+    fn target_name_base(self, ctx: &Context) -> String {
+        // clap_wrapper_builder derives its CMake target names from this cache
+        // variable. Keep xtask's derivation in one place so DAG task names can
+        // map predictably to concrete CMake targets.
+        format!(
+            "{}_{}",
+            ctx.metadata.package_name,
+            self.purpose().replace('-', "_")
+        )
+    }
+
     fn rust_build(self) -> RustPluginBuild {
         match self {
-            Self::Plugin { .. } => RustPluginBuild::Default,
+            Self::Plugins { .. } | Self::Aax => RustPluginBuild::Default,
             Self::Standalone => RustPluginBuild::Standalone,
         }
     }
 }
 
-fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) -> Result<()> {
+pub(crate) fn configure_wrapper(
+    ctx: &Context,
+    profile: BuildProfile,
+    build: WrapperBuild,
+) -> Result<()> {
+    // Keep SDK/submodule diagnostics close to the configure task even when the
+    // DAG was created by install, validate, or launch. Checking before the CMake
+    // stamp shortcut avoids silently relying on a stale cache after an SDK
+    // directory was removed or a submodule was never initialized on this machine.
+    ensure_common_wrapper_inputs(ctx)?;
+    match build {
+        WrapperBuild::Plugins { vst3, au } => {
+            if vst3 {
+                ensure_vst3_sdk_input(ctx)?;
+            }
+            if au {
+                ensure_au_sdk_input(ctx)?;
+            }
+        }
+        WrapperBuild::Aax => ensure_aax_sdk_input(ctx)?,
+        WrapperBuild::Standalone => {}
+    }
+
     let rust_build = build.rust_build();
     let static_library = rust_build.static_library(ctx, profile);
     ensure_exists(&static_library, "static plugin library")?;
 
     let build_dir = ctx.cmake_dir(build.purpose(), profile);
     let stage_dir = match build {
-        WrapperBuild::Plugin { .. } => ctx.plugins_dir(profile),
+        WrapperBuild::Plugins { .. } | WrapperBuild::Aax => ctx.plugins_dir(profile),
         WrapperBuild::Standalone => ctx.standalone_dir(profile),
     };
     fs::create_dir_all(&stage_dir)?;
 
-    let mut configure = Command::new("cmake");
+    let mut args = Vec::<OsString>::new();
+    push_cmake_arg(&mut args, "-S");
+    args.push(ctx.wrapper_dir.as_os_str().to_owned());
+    push_cmake_arg(&mut args, "-B");
+    args.push(build_dir.as_os_str().to_owned());
     // Build the wrapper directly from the Rust staticlib. Locating a pre-built CLAP bundle
     // instead would tie reproducibility to clean/install ordering and stale artifacts.
     // Pass the same stage path that xtask uses for downstream validation checks.
-    configure
-        .arg("-S")
-        .arg(&ctx.wrapper_dir)
-        .arg("-B")
-        .arg(&build_dir)
-        .arg(format!(
+    push_cmake_arg(
+        &mut args,
+        format!(
             "-DCLAP_WRAPPER_BUILDER_TARGET_LIB={}",
             static_library.display()
-        ))
-        .arg(format!(
+        ),
+    );
+    push_cmake_arg(
+        &mut args,
+        format!(
             "-DCLAP_WRAPPER_BUILDER_OUTPUT_NAME={}",
             ctx.metadata.bundle_name
-        ))
-        .arg(format!(
+        ),
+    );
+    push_cmake_arg(
+        &mut args,
+        format!(
             "-DCLAP_WRAPPER_BUILDER_TARGET_NAME={}_{}",
             ctx.metadata.package_name,
-            build.purpose()
-        ))
-        .arg(format!(
-            "-DCLAP_WRAPPER_BUILDER_STAGE_DIR={}",
-            stage_dir.display()
-        ))
-        .arg(format!(
+            build.purpose().replace('-', "_")
+        ),
+    );
+    push_cmake_arg(
+        &mut args,
+        format!("-DCLAP_WRAPPER_BUILDER_STAGE_DIR={}", stage_dir.display()),
+    );
+    push_cmake_arg(
+        &mut args,
+        format!(
             "-DCLAP_WRAPPER_BUILDER_BUNDLE_VERSION={}",
             ctx.metadata.version
-        ))
-        .arg(format!("-DCMAKE_BUILD_TYPE={}", profile.cmake_config()))
-        .arg("-DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=OFF")
-        .arg("-DCLAP_WRAPPER_CXX_STANDARD=23");
-    add_wrapper_product_args(ctx, &mut configure, build);
+        ),
+    );
+    push_cmake_arg(
+        &mut args,
+        format!("-DCMAKE_BUILD_TYPE={}", profile.cmake_config()),
+    );
+    push_cmake_arg(&mut args, "-DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=OFF");
+    push_cmake_arg(&mut args, "-DCLAP_WRAPPER_CXX_STANDARD=23");
+    add_wrapper_product_args(ctx, &mut args, build);
 
     match build {
-        WrapperBuild::Plugin { vst3, au, aax } => {
-            configure
-                .arg(format!(
-                    "-DCLAP_WRAPPER_BUILDER_BUILD_VST3={}",
-                    on_off(vst3)
-                ))
-                .arg(format!("-DCLAP_WRAPPER_BUILDER_BUILD_AUV2={}", on_off(au)))
-                .arg(format!("-DCLAP_WRAPPER_BUILDER_BUILD_AAX={}", on_off(aax)))
-                .arg("-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=OFF");
-            if aax {
-                configure.arg(format!("-DAAX_SDK_ROOT={}", aax_sdk_root(ctx)?.display()));
-            }
+        WrapperBuild::Plugins { vst3, au } => {
+            push_cmake_arg(
+                &mut args,
+                format!("-DCLAP_WRAPPER_BUILDER_BUILD_VST3={}", on_off(vst3)),
+            );
+            push_cmake_arg(
+                &mut args,
+                format!("-DCLAP_WRAPPER_BUILDER_BUILD_AUV2={}", on_off(au)),
+            );
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_AAX=OFF");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=OFF");
+        }
+        WrapperBuild::Aax => {
+            // AAX target creation happens during CMake configure and requires
+            // the Avid SDK root. Keeping this in wrap-aax-* avoids rewriting the
+            // VST3/AU CMake cache when users switch between targets.
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_VST3=OFF");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_AUV2=OFF");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_AAX=ON");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=OFF");
+            push_cmake_arg(
+                &mut args,
+                format!("-DAAX_SDK_ROOT={}", aax_sdk_root(ctx)?.display()),
+            );
         }
         WrapperBuild::Standalone => {
             // standalone requires additional app-side dependencies that plugin wrappers do not.
             // Delegate fetching to clap-wrapper's own download logic while keeping downloads
             // disabled for plugin wrapper builds.
-            configure
-                .arg("-DCLAP_WRAPPER_BUILDER_BUILD_VST3=OFF")
-                .arg("-DCLAP_WRAPPER_BUILDER_BUILD_AUV2=OFF")
-                .arg("-DCLAP_WRAPPER_BUILDER_BUILD_AAX=OFF")
-                .arg("-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=ON")
-                .arg("-DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=ON");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_VST3=OFF");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_AUV2=OFF");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_AAX=OFF");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=ON");
+            push_cmake_arg(&mut args, "-DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=ON");
         }
     }
 
     if ctx.platform == Platform::Macos {
         // AUv2 uses 4-character type/manufacturer/subtype codes as the host discovery key.
         // Drive them from the template's constants rather than inferring from the Rust descriptor.
-        configure
-            .arg(format!(
+        push_cmake_arg(
+            &mut args,
+            format!(
                 "-DAUDIOUNIT_SDK_ROOT={}",
                 ctx.wrapper_dir.join("AudioUnitSDK").display()
-            ))
-            .arg(format!(
+            ),
+        );
+        push_cmake_arg(
+            &mut args,
+            format!(
                 "-DCLAP_WRAPPER_AUV2_MANUFACTURER_NAME={}",
                 ctx.metadata.company_name
-            ))
-            .arg(format!(
+            ),
+        );
+        push_cmake_arg(
+            &mut args,
+            format!(
                 "-DCLAP_WRAPPER_AUV2_MANUFACTURER_CODE={}",
                 ctx.metadata.auv2_manufacturer_code
-            ));
+            ),
+        );
     }
 
     if let Some(generator) = ctx.platform.cmake_generator() {
-        configure.arg("-G").arg(generator);
+        push_cmake_arg(&mut args, "-G");
+        push_cmake_arg(&mut args, generator);
     }
 
+    if cmake_configure_is_current(&build_dir, &args)? {
+        println!(
+            "CMake configure is up to date for {} ({})",
+            build.purpose(),
+            profile.cmake_config()
+        );
+        return Ok(());
+    }
+
+    let mut configure = Command::new("cmake");
+    configure.args(&args);
     run(configure.current_dir(&ctx.root))?;
+    write_cmake_configure_stamp(&build_dir, &args)?;
+    Ok(())
+}
 
-    let mut build_cmd = Command::new("cmake");
-    build_cmd
-        .arg("--build")
-        .arg(&build_dir)
-        .arg("--config")
-        .arg(profile.cmake_config());
+pub(crate) fn build_wrapper_target(
+    ctx: &Context,
+    profile: BuildProfile,
+    build: WrapperBuild,
+    target: WrapperTarget,
+) -> Result<()> {
+    let build_dir = ctx.cmake_dir(build.purpose(), profile);
+    for cmake_target in cmake_wrapper_targets(ctx, build, target) {
+        // Build the concrete CMake target for this DAG node instead of ALL_BUILD.
+        // That keeps dry-run output aligned with the actual work and lets
+        // independent format tasks fail or pass separately.
+        let mut build_cmd = Command::new("cmake");
+        build_cmd
+            .arg("--build")
+            .arg(&build_dir)
+            .arg("--target")
+            .arg(cmake_target)
+            .arg("--config")
+            .arg(profile.cmake_config());
 
-    if ctx.platform == Platform::Macos {
-        // AudioUnitSDK emits GNU statement-expression and narrowing warnings in Xcode.
-        // Suppress them here so template users are not pulled into wrapper SDK warnings.
-        build_cmd.args([
-            "--",
-            "OTHER_CPLUSPLUSFLAGS=$(inherited) -Wno-unknown-warning-option -Wno-gnu-statement-expression-from-macro-expansion -Wno-shorten-64-to-32 -Wno-perf-constraint-implies-noexcept",
-        ]);
+        if ctx.platform == Platform::Macos {
+            // AudioUnitSDK emits GNU statement-expression and narrowing warnings in Xcode.
+            // Suppress them here so template users are not pulled into wrapper SDK warnings.
+            build_cmd.args([
+                "--",
+                "OTHER_CPLUSPLUSFLAGS=$(inherited) -Wno-unknown-warning-option -Wno-gnu-statement-expression-from-macro-expansion -Wno-shorten-64-to-32 -Wno-perf-constraint-implies-noexcept",
+            ]);
+        }
+
+        run(build_cmd.current_dir(&ctx.root))?;
     }
 
-    run(build_cmd.current_dir(&ctx.root))?;
-
-    match build {
-        WrapperBuild::Plugin { vst3, au, aax } => {
-            if vst3 {
-                ensure_exists(&ctx.vst3_bundle(profile), "VST3 artifact")?;
-                if ctx.platform == Platform::Macos {
-                    // macOS hosts may reject unsigned bundles; apply an ad-hoc signature for development.
-                    codesign_nested_macos_bundle(&ctx.vst3_bundle(profile))?;
-                }
-            }
-            if au {
-                for artifact in ctx.au_bundles(profile) {
-                    ensure_exists(&artifact, "AU artifact")?;
-                    // AU components are loaded via AudioComponentRegistrar, so they must be signed even for local builds.
-                    codesign_nested_macos_bundle(&artifact)?;
-                }
-            }
-            if aax {
-                ensure_exists(&ctx.aax_bundle(profile), "AAX artifact")?;
-                if ctx.platform == Platform::Macos {
-                    // AAX developer validation loads the bundle directly, so keep the
-                    // local artifact ad-hoc signed before the validator sees it.
-                    codesign_nested_macos_bundle(&ctx.aax_bundle(profile))?;
-                }
+    match target {
+        WrapperTarget::Vst3 => {
+            ensure_exists(&ctx.vst3_bundle(profile), "VST3 artifact")?;
+            if ctx.platform == Platform::Macos {
+                // macOS hosts may reject unsigned bundles; apply an ad-hoc signature for development.
+                codesign_nested_macos_bundle(&ctx.vst3_bundle(profile))?;
             }
         }
-        WrapperBuild::Standalone => {
+        WrapperTarget::Au => {
+            for artifact in ctx.au_bundles(profile) {
+                ensure_exists(&artifact, "AU artifact")?;
+                // AU components are loaded via AudioComponentRegistrar, so they must be signed even for local builds.
+                codesign_nested_macos_bundle(&artifact)?;
+            }
+        }
+        WrapperTarget::Aax => {
+            ensure_exists(&ctx.aax_bundle(profile), "AAX artifact")?;
+            if ctx.platform == Platform::Macos {
+                // AAX developer validation loads the bundle directly, so keep the
+                // local artifact ad-hoc signed before the validator sees it.
+                codesign_nested_macos_bundle(&ctx.aax_bundle(profile))?;
+            }
+        }
+        WrapperTarget::Standalone => {
             for artifact in ctx.standalone_artifacts(profile) {
                 ensure_exists(&artifact, "standalone artifact")?;
                 if ctx.platform == Platform::Macos {
@@ -418,62 +461,169 @@ fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) 
     Ok(())
 }
 
-fn add_wrapper_product_args(ctx: &Context, command: &mut Command, build: WrapperBuild) {
-    command.arg(format!(
-        "-DCLAP_WRAPPER_BUILDER_PRODUCT_COUNT={}",
-        ctx.metadata.plugins.len()
-    ));
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum WrapperTarget {
+    Vst3,
+    Au,
+    Aax,
+    Standalone,
+}
+
+fn cmake_wrapper_targets(ctx: &Context, build: WrapperBuild, target: WrapperTarget) -> Vec<String> {
+    let base = build.target_name_base(ctx);
+    match target {
+        WrapperTarget::Vst3 => vec![format!("{base}_vst3")],
+        WrapperTarget::Aax => vec![format!("{base}_aax")],
+        WrapperTarget::Au => ctx
+            .metadata
+            .plugins
+            .iter()
+            .enumerate()
+            .map(|(index, plugin)| {
+                format!(
+                    "{base}_product_{index}_{}_auv2",
+                    cmake_identifier(&plugin.plugin_name)
+                )
+            })
+            .collect::<Vec<_>>(),
+        WrapperTarget::Standalone => ctx
+            .metadata
+            .plugins
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("{base}_product_{index}_standalone"))
+            .collect::<Vec<_>>(),
+    }
+}
+
+fn cmake_identifier(value: &str) -> String {
+    // CMake's string(MAKE_C_IDENTIFIER) is used by clap_wrapper_builder when it
+    // creates product-specific AU targets. Mirror the part of that contract xtask
+    // needs for --target builds; otherwise multi-product AU builds would plan a
+    // target name that CMake never generated.
+    let mut identifier = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if !identifier
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+    {
+        identifier.insert(0, '_');
+    }
+    identifier
+}
+
+fn push_cmake_arg(args: &mut Vec<OsString>, arg: impl Into<OsString>) {
+    args.push(arg.into());
+}
+
+fn cmake_configure_stamp_path(build_dir: &Path) -> PathBuf {
+    build_dir.join(".wrac-configure-args")
+}
+
+fn cmake_configure_stamp(args: &[OsString]) -> String {
+    args.iter()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn cmake_configure_is_current(build_dir: &Path, args: &[OsString]) -> Result<bool> {
+    let cache = build_dir.join("CMakeCache.txt");
+    let stamp_path = cmake_configure_stamp_path(build_dir);
+    if !cache.exists() || !stamp_path.exists() {
+        return Ok(false);
+    }
+
+    // Running CMake configure on every xtask invocation rewrites generated
+    // wrapper entry files, which then forces Xcode/MSBuild to relink even when
+    // the selected CMake target is unchanged. The stamp tracks only xtask-owned
+    // configure inputs; CMake's ZERO_CHECK still handles changes inside the
+    // already-configured source tree during the build step.
+    Ok(fs::read_to_string(stamp_path)? == cmake_configure_stamp(args))
+}
+
+fn write_cmake_configure_stamp(build_dir: &Path, args: &[OsString]) -> Result<()> {
+    fs::write(
+        cmake_configure_stamp_path(build_dir),
+        cmake_configure_stamp(args),
+    )?;
+    Ok(())
+}
+
+fn add_wrapper_product_args(ctx: &Context, args: &mut Vec<OsString>, build: WrapperBuild) {
+    push_cmake_arg(
+        args,
+        format!(
+            "-DCLAP_WRAPPER_BUILDER_PRODUCT_COUNT={}",
+            ctx.metadata.plugins.len()
+        ),
+    );
     for (index, plugin) in ctx.metadata.plugins.iter().enumerate() {
         match build {
-            WrapperBuild::Plugin { au: true, .. } => {
+            WrapperBuild::Plugins { au: true, .. } => {
                 // CLAP/VST3/AAX read product descriptors from the Rust plugin factory.
                 // AUv2 cannot, so only AUv2 builds need per-product output and
                 // four-character AudioComponent identity values from xtask.
-                command
-                    .arg(format!(
+                push_cmake_arg(
+                    args,
+                    format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_OUTPUT_NAME={}",
                         plugin.plugin_name
-                    ))
-                    .arg(format!(
+                    ),
+                );
+                push_cmake_arg(
+                    args,
+                    format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_AUV2_TYPE={}",
                         plugin.auv2_type
-                    ))
-                    .arg(format!(
+                    ),
+                );
+                push_cmake_arg(
+                    args,
+                    format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_AUV2_SUBTYPE={}",
                         plugin.auv2_subtype
-                    ));
+                    ),
+                );
             }
             WrapperBuild::Standalone => {
                 // Each standalone app embeds the product ID it should host at
                 // compile time; passing all standalone metadata keeps CMake from
                 // choosing an implicit primary product.
-                command
-                    .arg(format!(
+                push_cmake_arg(
+                    args,
+                    format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_OUTPUT_NAME={}",
                         plugin.plugin_name
-                    ))
-                    .arg(format!(
+                    ),
+                );
+                push_cmake_arg(
+                    args,
+                    format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_PLUGIN_ID={}",
                         plugin.plugin_id
-                    ))
-                    .arg(format!(
+                    ),
+                );
+                push_cmake_arg(
+                    args,
+                    format!(
                         "-DCLAP_WRAPPER_BUILDER_PRODUCT_{index}_STANDALONE_NAME={}",
                         plugin.standalone_name
-                    ));
+                    ),
+                );
             }
-            WrapperBuild::Plugin { au: false, .. } => {}
+            WrapperBuild::Plugins { au: false, .. } | WrapperBuild::Aax => {}
         }
     }
-}
-
-pub(crate) fn install(
-    ctx: &Context,
-    profile: BuildProfile,
-    scope: InstallScope,
-    requested: &[PluginTarget],
-) -> Result<()> {
-    let targets = resolve_plugin_targets(ctx.platform, requested)?;
-    install_plugin_targets(ctx, profile, scope, &targets)
 }
 
 pub(crate) fn launch(ctx: &Context, profile: BuildProfile, plugin_id: Option<&str>) -> Result<()> {
@@ -499,6 +649,13 @@ pub(crate) fn launch(ctx: &Context, profile: BuildProfile, plugin_id: Option<&st
         Platform::Windows | Platform::Linux => run(&mut Command::new(&artifact))?,
     }
     Ok(())
+}
+
+pub(crate) fn ensure_launch_target_exists(ctx: &Context, plugin_id: Option<&str>) -> Result<()> {
+    // Launch has to build the standalone app before opening it, but an invalid
+    // product selection is independent of build artifacts. Check it upfront so
+    // typos in --plugin-id do not trigger a full standalone build.
+    standalone_plugin_to_launch(ctx, plugin_id).map(|_| ())
 }
 
 fn standalone_plugin_to_launch<'a>(
@@ -529,82 +686,67 @@ fn standalone_plugin_to_launch<'a>(
     }
 }
 
-fn install_plugin_targets(
+pub(crate) fn install_plugin_target(
     ctx: &Context,
     profile: BuildProfile,
     scope: InstallScope,
-    targets: &[PluginTarget],
+    target: PluginTarget,
 ) -> Result<()> {
-    for target in targets {
-        match target {
-            PluginTarget::Clap => install_artifact(
-                &ctx.clap_bundle(profile),
-                &install_dir(ctx, scope, PluginFormat::Clap)?,
-            )?,
-            PluginTarget::Vst3 => install_artifact(
-                &ctx.vst3_bundle(profile),
-                &install_dir(ctx, scope, PluginFormat::Vst3)?,
-            )?,
-            PluginTarget::Aax => install_artifact(
-                &ctx.aax_bundle(profile),
-                &install_dir(ctx, scope, PluginFormat::Aax)?,
-            )?,
-            PluginTarget::Au => {
-                let install_dir = install_dir(ctx, scope, PluginFormat::Au)?;
-                for artifact in ctx.au_bundles(profile) {
-                    install_artifact(&artifact, &install_dir)?;
-                }
+    match target {
+        PluginTarget::Clap => install_artifact(
+            &ctx.clap_bundle(profile),
+            &install_dir(ctx, scope, PluginFormat::Clap)?,
+        )?,
+        PluginTarget::Vst3 => install_artifact(
+            &ctx.vst3_bundle(profile),
+            &install_dir(ctx, scope, PluginFormat::Vst3)?,
+        )?,
+        PluginTarget::Aax => install_artifact(
+            &ctx.aax_bundle(profile),
+            &install_dir(ctx, scope, PluginFormat::Aax)?,
+        )?,
+        PluginTarget::Au => {
+            let install_dir = install_dir(ctx, scope, PluginFormat::Au)?;
+            for artifact in ctx.au_bundles(profile) {
+                install_artifact(&artifact, &install_dir)?;
             }
         }
     }
     Ok(())
 }
 
-pub(crate) fn uninstall(
+pub(crate) fn uninstall_plugin_target(
     ctx: &Context,
     scope: UninstallScope,
-    requested: &[PluginTarget],
+    target: PluginTarget,
     dry_run: bool,
-) -> Result<()> {
-    let targets = resolve_plugin_targets(ctx.platform, requested)?;
-
+) -> Result<(usize, usize)> {
     let mut removed = 0usize;
     let mut missing = 0usize;
-    for target in targets {
-        for path in installed_artifacts(ctx, scope, target)? {
-            if !path.exists() {
-                println!("Not found: {}", path.display());
-                missing += 1;
-                continue;
-            }
-
-            if dry_run {
-                println!("Would remove: {}", path.display());
-            } else {
-                println!("Removing: {}", path.display());
-                remove_if_exists(&path)?;
-            }
-            removed += 1;
+    for path in installed_artifacts(ctx, scope, target)? {
+        if !path.exists() {
+            println!("Not found: {}", path.display());
+            missing += 1;
+            continue;
         }
-    }
 
-    if dry_run {
-        println!("Uninstall dry run complete: {removed} would be removed, {missing} not found");
-    } else {
-        println!("Uninstall complete: {removed} removed, {missing} not found");
+        if dry_run {
+            println!("Would remove: {}", path.display());
+        } else {
+            println!("Removing: {}", path.display());
+            remove_if_exists(&path)?;
+        }
+        removed += 1;
     }
-    Ok(())
+    Ok((removed, missing))
 }
 
-#[derive(Debug, Clone, Copy)]
-enum PluginFormat {
-    Clap,
-    Vst3,
-    Au,
-    Aax,
-}
-
-fn install_dir(ctx: &Context, scope: InstallScope, format: PluginFormat) -> Result<PathBuf> {
+pub(crate) fn install_dir(
+    ctx: &Context,
+    scope: InstallScope,
+    format: PluginFormat,
+) -> Result<PathBuf> {
+    let scope = effective_install_scope(scope, format);
     let dir = match (ctx.platform, scope, format) {
         (Platform::Macos, InstallScope::User, PluginFormat::Clap) => {
             home_dir()?.join("Library/Audio/Plug-Ins/CLAP")
@@ -674,11 +816,14 @@ fn install_dir(ctx: &Context, scope: InstallScope, format: PluginFormat) -> Resu
         (Platform::Linux, _, PluginFormat::Au) => {
             return Err("AU is not supported on Linux".into());
         }
+        (_, InstallScope::Default, _) => {
+            unreachable!("InstallScope::Default must be resolved before install_dir matching")
+        }
     };
     Ok(dir)
 }
 
-fn install_artifact(artifact: &Path, destination_dir: &Path) -> Result<()> {
+pub(crate) fn install_artifact(artifact: &Path, destination_dir: &Path) -> Result<()> {
     ensure_exists(artifact, "install artifact")?;
     fs::create_dir_all(destination_dir)?;
     let destination = destination_dir.join(
@@ -694,17 +839,12 @@ fn install_artifact(artifact: &Path, destination_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn installed_artifacts(
+pub(crate) fn installed_artifacts(
     ctx: &Context,
     scope: UninstallScope,
     target: PluginTarget,
 ) -> Result<Vec<PathBuf>> {
-    let format = match target {
-        PluginTarget::Clap => PluginFormat::Clap,
-        PluginTarget::Vst3 => PluginFormat::Vst3,
-        PluginTarget::Au => PluginFormat::Au,
-        PluginTarget::Aax => PluginFormat::Aax,
-    };
+    let format = target.format();
     let bundle_names = match target {
         PluginTarget::Clap => vec![ctx.metadata.clap_bundle_name()],
         PluginTarget::Vst3 => vec![ctx.metadata.vst3_bundle_name()],
@@ -748,88 +888,73 @@ fn uninstall_scopes(
     }
 }
 
-pub(crate) fn validate(
-    ctx: &Context,
-    profile: BuildProfile,
-    requested: &[ValidateTarget],
-) -> Result<()> {
-    let targets = resolve_validate_targets(ctx.platform, requested)?;
-    if targets.contains(&ValidateTarget::Vst3) {
-        // The validator is built on-demand from the VST3 SDK, so verify the SDK before checking
-        // the artifact. Proceeding to CMake with an empty submodule directory produces an opaque error.
-        ensure_vst3_sdk_input(ctx)?;
+pub(crate) fn effective_install_scope(scope: InstallScope, format: PluginFormat) -> InstallScope {
+    match (scope, format) {
+        (InstallScope::Default, PluginFormat::Aax) => InstallScope::System,
+        (InstallScope::Default, _) => InstallScope::User,
+        _ => scope,
     }
-    if targets.contains(&ValidateTarget::Aax) {
-        ensure_aax_sdk_input(ctx)?;
-    }
-    validate_targets(ctx, profile, &targets)
 }
 
-fn validate_targets(
+pub(crate) fn validate_wrac_rules_for_targets(
     ctx: &Context,
     profile: BuildProfile,
     targets: &[ValidateTarget],
 ) -> Result<()> {
-    if targets.is_empty() {
-        println!("No validation targets to validate.");
-        return Ok(());
-    }
+    validate_wrac_rules(ctx, profile, targets)
+}
 
-    validate_wrac_rules(ctx, profile, targets)?;
-
-    if targets.contains(&ValidateTarget::Clap) {
-        let clap = ctx.clap_bundle(profile);
-        ensure_exists(&clap, "CLAP artifact")?;
-        let validator = ensure_clap_validator(ctx)?;
-        run(Command::new(validator)
-            .arg("validate")
-            .arg(&clap)
-            .arg("--only-failed")
-            .current_dir(&ctx.root))?;
-    }
-
-    if targets.contains(&ValidateTarget::Vst3) {
-        let vst3 = ctx.vst3_bundle(profile);
-        ensure_exists(&vst3, "VST3 artifact")?;
-        let validator = ensure_vst3_validator(ctx)?;
-        run(Command::new(validator).arg(&vst3).current_dir(&ctx.root))?;
-    }
-
-    if targets.contains(&ValidateTarget::Au) {
-        ensure_no_system_au_conflict(ctx)?;
-
-        // auval resolves its target via AudioComponentRegistrar rather than a direct path,
-        // so the freshly built AU must be installed user-locally before running validation.
-        let install_dir = install_dir(ctx, InstallScope::User, PluginFormat::Au)?;
-        for artifact in ctx.au_bundles(profile) {
-            ensure_exists(&artifact, "AU artifact")?;
-            install_artifact(&artifact, &install_dir)?;
-        }
-
-        // The registrar caches component metadata, so it must be restarted to expose the newly placed AU.
-        // If killall fails, auval may still detect the component, so treat this as best-effort.
-        let _ = Command::new("killall")
-            .args(["-9", "AudioComponentRegistrar"])
-            .status();
-
-        for plugin in &ctx.metadata.plugins {
-            run(Command::new("/usr/bin/auval")
-                .args([
-                    "-v",
-                    &plugin.auv2_type,
-                    &plugin.auv2_subtype,
-                    &ctx.metadata.auv2_manufacturer_code,
-                ])
+pub(crate) fn validate_plugin_target(
+    ctx: &Context,
+    profile: BuildProfile,
+    target: ValidateTarget,
+) -> Result<()> {
+    match target {
+        ValidateTarget::Clap => {
+            let clap = ctx.clap_bundle(profile);
+            ensure_exists(&clap, "CLAP artifact")?;
+            let validator = ensure_clap_validator(ctx)?;
+            run(Command::new(validator)
+                .arg("validate")
+                .arg(&clap)
+                .arg("--only-failed")
                 .current_dir(&ctx.root))?;
         }
-    }
+        ValidateTarget::Vst3 => {
+            let vst3 = ctx.vst3_bundle(profile);
+            ensure_exists(&vst3, "VST3 artifact")?;
+            let validator = ensure_vst3_validator(ctx)?;
+            run(Command::new(validator).arg(&vst3).current_dir(&ctx.root))?;
+        }
+        ValidateTarget::Au => {
+            ensure_no_system_au_conflict(ctx)?;
+            for artifact in ctx.au_bundles(profile) {
+                ensure_exists(&artifact, "AU artifact")?;
+            }
 
-    if targets.contains(&ValidateTarget::Aax) {
-        let aax = ctx.aax_bundle(profile);
-        ensure_exists(&aax, "AAX artifact")?;
-        run_aax_validator(ctx, &aax)?;
-    }
+            // The registrar caches component metadata, so it must be restarted to expose the newly placed AU.
+            // If killall fails, auval may still detect the component, so treat this as best-effort.
+            let _ = Command::new("killall")
+                .args(["-9", "AudioComponentRegistrar"])
+                .status();
 
+            for plugin in &ctx.metadata.plugins {
+                run(Command::new("/usr/bin/auval")
+                    .args([
+                        "-v",
+                        &plugin.auv2_type,
+                        &plugin.auv2_subtype,
+                        &ctx.metadata.auv2_manufacturer_code,
+                    ])
+                    .current_dir(&ctx.root))?;
+            }
+        }
+        ValidateTarget::Aax => {
+            let aax = ctx.aax_bundle(profile);
+            ensure_exists(&aax, "AAX artifact")?;
+            run_aax_validator(ctx, &aax)?;
+        }
+    }
     Ok(())
 }
 
@@ -973,6 +1098,9 @@ fn assert_aax_validator_results(results_dir: &Path) -> Result<()> {
     let mut failed = Vec::new();
     for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
         let result_path = aax_validator_result_path(results_dir, index, test_id);
+        // DTT's process exit is not enough for reviewable validation: the official
+        // JSON result records the test ID and validator result_status that CI logs
+        // and artifacts can be audited against.
         let status = aax_validator_result_status(&result_path)?;
         if status == "E_COMPLETED_PASS" {
             println!("AAX validator PASS: {test_id}");
@@ -1245,16 +1373,8 @@ fn normalize_windows_aax_validator_main_config(path: &Path) -> Result<()> {
 }
 
 fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
-    if let Some(root) = env::var_os("AAX_VALIDATOR_DSH_ROOT").map(PathBuf::from) {
-        return Ok(root);
-    }
-
+    let archive = aax_validator_dsh_archive(ctx)?;
     let extracted_root = ctx.target_dir.join("tools").join("aax-validator-dsh");
-    if aax_validator_dsh_executable(&extracted_root, ctx.platform).is_ok() {
-        return Ok(extracted_root);
-    }
-
-    let archive = aax_validator_dsh_archive()?;
     // Extract into target/ so CI caches or local builds can reuse the private
     // validator without committing Avid binaries to the template repository.
     remove_if_exists(&extracted_root)?;
@@ -1284,61 +1404,15 @@ fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
     Ok(extracted_root)
 }
 
-fn aax_validator_dsh_archive() -> Result<PathBuf> {
-    if let Some(archive) = env::var_os("AAX_VALIDATOR_DSH_ARCHIVE").map(PathBuf::from) {
-        ensure_exists(&archive, "AAX validator/DSH archive")?;
-        return Ok(archive);
-    }
-    // Environment variables are the reproducible path for CI. The Downloads fallback
-    // is only a local developer convenience for the exact Avid archive names.
-    let downloads = home_dir()?.join("Downloads");
-    for name in [
-        "aax-validator-dsh-2024-6-0-138bab0d-mac-arm64.tar.gz",
-        "aax-validator-dsh-2024-6-0-138bab0d-mac-x64.tar.gz",
-        "aax-validator-dsh-2024-6-0-dc68c2dd-win-x86_64.zip",
-    ] {
-        let archive = downloads.join(name);
-        if archive.exists() {
-            return Ok(archive);
-        }
-    }
-    Err("AAX validator/DSH not found. Set AAX_VALIDATOR_DSH_ROOT to the extracted validator directory or AAX_VALIDATOR_DSH_ARCHIVE to the downloaded archive.".into())
-}
-
-fn aax_validator_dsh_executable(root: &Path, platform: Platform) -> Result<PathBuf> {
-    let executable = executable_name("dsh", platform);
-    for candidate in [
-        // Avid's Windows validator ReadMe starts DigiShell from the package root.
-        // The Tools copy can launch but may not consume scripted stdin reliably on
-        // hosted CI, so prefer the root executable for Windows zip archives.
-        root.join("DigiShell").join(&executable),
-        // Zip extraction keeps the archive's top-level DigiShell directory. Include the
-        // nested Windows paths so CI can consume Avid's downloaded archive directly.
-        root.join("DigiShell")
-            .join("AAXValidatorResources")
-            .join("Tools")
-            .join(&executable),
-        // Windows validator archives place the runnable validator dish and helper
-        // executables under AAXValidatorResources/Tools. Keep it as a fallback for
-        // extracted roots supplied by users.
-        root.join("AAXValidatorResources")
-            .join("Tools")
-            .join(&executable),
-        // macOS archives expose CommandLineTools at the package root.
-        root.join("CommandLineTools").join(&executable),
-        // Some Windows archives also include a top-level dsh.exe. Keep it as a fallback
-        // for extracted roots supplied by users, but do not rely on it in CI.
-        root.join(&executable),
-    ] {
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err(format!(
-        "AAX validator DSH executable not found under {}",
-        root.display()
-    )
-    .into())
+fn aax_validator_dsh_archive(ctx: &Context) -> Result<PathBuf> {
+    let Some(archive) = env_path(ctx, "AAX_VALIDATOR_DSH_ARCHIVE")? else {
+        return Err(
+            "AAX validator/DSH archive not found. Set AAX_VALIDATOR_DSH_ARCHIVE in .env or the process environment."
+                .into(),
+        );
+    };
+    ensure_exists(&archive, "AAX validator/DSH archive")?;
+    Ok(archive)
 }
 
 fn aax_validator_dtt_runner(root: &Path, platform: Platform) -> Result<PathBuf> {
@@ -1513,12 +1587,7 @@ pub(crate) fn clean(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-fn ensure_wrapper_inputs(
-    ctx: &Context,
-    needs_vst3: bool,
-    needs_au: bool,
-    needs_aax: bool,
-) -> Result<()> {
+fn ensure_common_wrapper_inputs(ctx: &Context) -> Result<()> {
     // Missing subtree files or uninitialized SDK submodules otherwise surface as opaque CMake errors.
     // Check the sentinel files the wrapper actually reads.
     ensure_exists(&ctx.wrapper_dir, "clap_wrapper_builder directory")?;
@@ -1534,22 +1603,6 @@ fn ensure_wrapper_inputs(
             .join("clap.h"),
         "CLAP SDK submodule",
     )?;
-    if needs_vst3 {
-        ensure_vst3_sdk_input(ctx)?;
-    }
-    if needs_au {
-        ensure_exists(
-            &ctx.wrapper_dir
-                .join("AudioUnitSDK")
-                .join("include")
-                .join("AudioUnitSDK")
-                .join("AudioUnitSDK.h"),
-            "AudioUnitSDK submodule",
-        )?;
-    }
-    if needs_aax {
-        ensure_aax_sdk_input(ctx)?;
-    }
     Ok(())
 }
 
@@ -1560,46 +1613,53 @@ fn ensure_vst3_sdk_input(ctx: &Context) -> Result<()> {
     )
 }
 
+fn ensure_au_sdk_input(ctx: &Context) -> Result<()> {
+    ensure_exists(
+        &ctx.wrapper_dir
+            .join("AudioUnitSDK")
+            .join("include")
+            .join("AudioUnitSDK")
+            .join("AudioUnitSDK.h"),
+        "AudioUnitSDK submodule",
+    )
+}
+
 fn ensure_aax_sdk_input(ctx: &Context) -> Result<()> {
     let root = aax_sdk_root(ctx)?;
     ensure_exists(&root.join("Interfaces").join("AAX.h"), "AAX SDK")
 }
 
 fn aax_sdk_root(ctx: &Context) -> Result<PathBuf> {
-    if let Some(root) = env::var_os("AAX_SDK_ROOT").map(PathBuf::from) {
+    if let Some(root) = env_path(ctx, "AAX_SDK_ROOT")? {
         // clap-wrapper evaluates AAX_SDK_ROOT inside its CMake project, so a relative
         // path would be resolved against clap_wrapper_builder rather than this repo.
-        // Normalize here so CI and local shells can both use repo-relative paths.
-        return Ok(if root.is_absolute() {
-            root
-        } else {
-            ctx.root.join(root)
-        });
+        // Resolve relative .env and CI paths from the repository root instead.
+        ensure_exists(&root.join("Interfaces").join("AAX.h"), "AAX SDK")?;
+        return Ok(root);
     }
 
-    // Local Avid downloads are commonly unpacked under Downloads. Environment
-    // variables remain the deterministic CI path; this fallback keeps first-run
-    // developer validation from requiring shell-profile edits.
-    let downloads = home_dir()?.join("Downloads");
-    for name in ["aax-sdk-2-9-0", "aax-sdk-2-8-1"] {
-        let root = downloads.join(name);
-        if root.join("Interfaces").join("AAX.h").exists() {
-            return Ok(root);
-        }
-    }
-
-    Err("AAX SDK not found. Set AAX_SDK_ROOT to the extracted AAX SDK root directory.".into())
+    Err("AAX SDK not found. Set AAX_SDK_ROOT in .env or the process environment.".into())
 }
 
-fn executable_name(name: &str, platform: Platform) -> String {
-    if platform == Platform::Windows {
-        format!("{name}.exe")
+fn env_path(ctx: &Context, key: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = env::var_os(key) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(Some(path))
     } else {
-        name.to_string()
+        // `.env` lives at the workspace root, and CI also runs xtask from that
+        // root. Using one base directory avoids CMake resolving relative AAX
+        // paths from clap_wrapper_builder or another subprocess directory.
+        Ok(Some(ctx.root.join(path)))
     }
 }
 
-fn print_outputs(ctx: &Context, profile: BuildProfile, targets: &[Target]) {
+pub(crate) fn print_outputs(ctx: &Context, profile: BuildProfile, targets: &[Target]) {
     for target in targets {
         match target {
             Target::Clap => println!("CLAP: {}", ctx.clap_bundle(profile).display()),

@@ -9,10 +9,8 @@ const BUILD_AFTER_HELP: &str = "\
 Targets:
   clap, vst3, au, aax, standalone
 
-Default targets by platform:
-  macOS:   clap, vst3, au, standalone
-  Windows: clap, vst3, standalone
-  Linux:   clap, vst3, standalone
+Default targets:
+  package.metadata.wrac.supported_formats plus standalone
 
 Examples:
   cargo xtask build
@@ -24,17 +22,16 @@ Examples:
 
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
-  `install`, `validate`, and `launch` build their required artifacts before use.
+  xtask expands requested terminal tasks into a dependency graph before execution.
+  Explicit plugin-format targets must be listed in package.metadata.wrac.supported_formats.
   VST3/AU/AAX/standalone targets require clap-wrapper dependencies.";
 
 const INSTALL_AFTER_HELP: &str = "\
 Targets:
   clap, vst3, au, aax
 
-Default targets by platform:
-  macOS:   clap, vst3, au
-  Windows: clap, vst3
-  Linux:   clap, vst3
+Default targets:
+  package.metadata.wrac.supported_formats
 
 Examples:
   cargo xtask install
@@ -45,18 +42,17 @@ Examples:
 
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
-  install builds the selected plugin formats before copying artifacts.
-  --scope defaults to user. Use --scope=system for hosts that only scan system-wide plugin folders.
+  install expands the selected plugin formats into a dependency graph before copying artifacts.
+  Explicit targets must be listed in package.metadata.wrac.supported_formats.
+  --scope=default installs AAX system-wide and CLAP/VST3/AU user-locally.
   standalone is not a plugin format and cannot be installed with this command.";
 
 const UNINSTALL_AFTER_HELP: &str = "\
 Targets:
   clap, vst3, au, aax
 
-Default targets by platform:
-  macOS:   clap, vst3, au
-  Windows: clap, vst3
-  Linux:   clap, vst3
+Default targets:
+  package.metadata.wrac.supported_formats
 
 Examples:
   cargo xtask uninstall
@@ -68,16 +64,16 @@ Examples:
 
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
-  --scope defaults to all and removes both user-local and system-wide plugin artifacts.";
+  Explicit targets must be listed in package.metadata.wrac.supported_formats.
+  --scope defaults to all and removes both user-local and system-wide plugin artifacts.
+  AAX has no user-local install scope, so --scope=all removes only its system-wide Avid bundle.";
 
 const VALIDATE_AFTER_HELP: &str = "\
 Targets:
   clap, vst3, au, aax
 
-Default targets by platform:
-  macOS:   clap, vst3, au
-  Windows: clap, vst3
-  Linux:   clap, vst3
+Default targets:
+  package.metadata.wrac.supported_formats
 
 Examples:
   cargo xtask validate
@@ -88,12 +84,17 @@ Examples:
 
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
-  validate builds the selected plugin formats, runs WRAC production-readiness checks, then runs external validators.
+  validate expands the selected plugin formats into a dependency graph, runs WRAC checks, then runs external validators.
+  Explicit targets must be listed in package.metadata.wrac.supported_formats.
   WRAC check violations are errors. See docs/production-readiness-checks.md for rule IDs and disable metadata.
   CLAP validation downloads clap-validator 0.3.2 into target/tools if needed.
   VST3 validation uses the VST3 validator.
   AU validation is available only on macOS and installs the built AU before running auval.
-  AAX validation requires the AAX SDK plus AAX validator/DSH and is run only when explicitly targeted.
+  AAX validation requires AAX_SDK_ROOT and AAX_VALIDATOR_DSH_ARCHIVE from .env or the process environment.
+  AAX validation runs selected AAX Validator tests by test ID through Avid's bundled DTT runner.
+  AAX validation saves official JSON results under target/wrac-plugins/<package>/wrac/validation/aax/.
+  AAX validation intentionally skips DSP/HDX cycle-count and page-table XML load tests.
+  --continue-on-error continues independent tasks after failures, but the final exit status remains non-zero.
   AU validation fails if the same AU bundle exists under /Library/Audio/Plug-Ins/Components.";
 
 const LAUNCH_AFTER_HELP: &str = "\
@@ -105,7 +106,8 @@ Examples:
   cargo xtask launch -p wrac_gain_plugin --release
 
 Notes:
-  launch builds standalone artifacts before starting one. Use --plugin-id when a package exposes multiple plugin products.";
+  launch builds only the standalone target and its dependencies before starting the app.
+  Use --plugin-id when a package exposes multiple plugin products; invalid IDs fail before building.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -167,14 +169,23 @@ pub(crate) struct BuildArgs {
     #[arg(long, help = "Remove generated plugin artifacts before building.")]
     pub(crate) clean: bool,
 
+    #[arg(long, help = "Print the task graph plan without executing it.")]
+    pub(crate) dry_run: bool,
+
     #[arg(
-        short_alias = 't',
+        long,
+        help = "Continue independent tasks after a task fails; final exit status remains non-zero."
+    )]
+    pub(crate) continue_on_error: bool,
+
+    #[arg(
+        short = 't',
         long,
         value_enum,
         value_delimiter = ',',
         num_args = 1..,
         help = "Targets to build, comma-separated.",
-        long_help = "Targets to build, comma-separated. Supported values are clap, vst3, au, aax, and standalone. Defaults to every target supported by the current OS except AAX, which must be requested explicitly."
+        long_help = "Targets to build, comma-separated. Supported values are clap, vst3, au, aax, and standalone. Defaults to package.metadata.wrac.supported_formats plus standalone."
     )]
     pub(crate) target: Vec<Target>,
 }
@@ -195,27 +206,38 @@ pub(crate) struct InstallArgs {
     pub(crate) release: bool,
 
     #[arg(
+        short = 's',
         long,
         value_enum,
-        default_value_t = InstallScope::User,
+        default_value_t = InstallScope::Default,
         help = "Install location scope."
     )]
     pub(crate) scope: InstallScope,
 
+    #[arg(long, help = "Print the task graph plan without executing it.")]
+    pub(crate) dry_run: bool,
+
     #[arg(
-        short_alias = 't',
+        long,
+        help = "Continue independent tasks after a task fails; final exit status remains non-zero."
+    )]
+    pub(crate) continue_on_error: bool,
+
+    #[arg(
+        short = 't',
         long,
         value_enum,
         value_delimiter = ',',
         num_args = 1..,
         help = "Plugin formats to install, comma-separated.",
-        long_help = "Plugin formats to install, comma-separated. Supported values are clap, vst3, au, and aax. Defaults to every plugin format supported by the current OS except AAX, which must be requested explicitly. standalone is not supported here."
+        long_help = "Plugin formats to install, comma-separated. Supported values are clap, vst3, au, and aax. Defaults to package.metadata.wrac.supported_formats. standalone is not supported here."
     )]
     pub(crate) target: Vec<PluginTarget>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum InstallScope {
+    Default,
     User,
     System,
 }
@@ -240,6 +262,7 @@ pub(crate) struct UninstallArgs {
     pub(crate) all: bool,
 
     #[arg(
+        short = 's',
         long,
         value_enum,
         default_value_t = UninstallScope::All,
@@ -248,13 +271,13 @@ pub(crate) struct UninstallArgs {
     pub(crate) scope: UninstallScope,
 
     #[arg(
-        short_alias = 't',
+        short = 't',
         long,
         value_enum,
         value_delimiter = ',',
         num_args = 1..,
         help = "Plugin formats to uninstall, comma-separated.",
-        long_help = "Plugin formats to uninstall, comma-separated. Supported values are clap, vst3, au, and aax. Defaults to every plugin format supported by the current OS except AAX, which must be requested explicitly. standalone is not supported here."
+        long_help = "Plugin formats to uninstall, comma-separated. Supported values are clap, vst3, au, and aax. Defaults to package.metadata.wrac.supported_formats. standalone is not supported here."
     )]
     pub(crate) target: Vec<PluginTarget>,
 
@@ -263,6 +286,12 @@ pub(crate) struct UninstallArgs {
         help = "Print paths that would be removed without deleting them."
     )]
     pub(crate) dry_run: bool,
+
+    #[arg(
+        long,
+        help = "Continue independent tasks after a task fails; final exit status remains non-zero."
+    )]
+    pub(crate) continue_on_error: bool,
 }
 
 #[derive(Debug, Args)]
@@ -280,14 +309,23 @@ pub(crate) struct ValidateArgs {
     #[arg(long, help = "Validate release artifacts.")]
     pub(crate) release: bool,
 
+    #[arg(long, help = "Print the task graph plan without executing it.")]
+    pub(crate) dry_run: bool,
+
     #[arg(
-        short_alias = 't',
+        long,
+        help = "Continue independent tasks after a task fails; final exit status remains non-zero."
+    )]
+    pub(crate) continue_on_error: bool,
+
+    #[arg(
+        short = 't',
         long,
         value_enum,
         value_delimiter = ',',
         num_args = 1..,
         help = "Targets to validate, comma-separated.",
-        long_help = "Targets to validate, comma-separated. Supported values are clap, vst3, au, and aax. Defaults to every validation target supported by the current OS except AAX, which must be requested explicitly."
+        long_help = "Targets to validate, comma-separated. Supported values are clap, vst3, au, and aax. Defaults to package.metadata.wrac.supported_formats."
     )]
     pub(crate) target: Vec<ValidateTarget>,
 }

@@ -563,7 +563,7 @@ mod tests {
         AaxStemConfigMetadata, DisabledValidationRule, PluginMetadata, PluginProductMetadata,
         ValidationMetadata,
     };
-    use crate::targets::ValidateTarget;
+    use crate::targets::{PluginFormat, ValidateTarget};
 
     use super::super::clap_schema::{ParameterSchema, PluginSchema};
     use super::*;
@@ -591,6 +591,7 @@ mod tests {
             support_url: "https://example.com/support".to_string(),
             description: "Test plugin".to_string(),
             copyright: "Copyright 2026 Example".to_string(),
+            supported_formats: vec![PluginFormat::Clap, PluginFormat::Vst3, PluginFormat::Au],
             plugins: vec![PluginProductMetadata {
                 plugin_id: "com.example.test".to_string(),
                 plugin_name: "Test Plugin".to_string(),

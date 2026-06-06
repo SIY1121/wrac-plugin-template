@@ -1,3 +1,4 @@
+use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 
@@ -7,16 +8,16 @@ mod cli;
 mod commands;
 mod context;
 mod metadata;
+mod plan;
 mod profile;
 mod targets;
 mod util;
 mod validation;
 
 use cli::{Cli, Commands};
-use commands::{build, clean, install, launch, uninstall, validate};
+use commands::{clean, launch};
 use context::{Context, available_packages};
 use profile::BuildProfile;
-use targets::{Target, resolve_plugin_targets, resolve_validate_targets};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -28,6 +29,7 @@ pub struct XtaskConfig {
 }
 
 pub fn run(config: XtaskConfig) -> Result<()> {
+    load_workspace_dotenv(&config)?;
     let cli = Cli::parse();
 
     match cli.command {
@@ -35,40 +37,77 @@ pub fn run(config: XtaskConfig) -> Result<()> {
             // Keep build/install logic scoped to one plugin package at a time. A package may
             // export multiple plugin products; the shared Context is still the correct unit for
             // metadata, GUI assets, wrapper staging, and install paths.
+            let mut failures = Vec::new();
             for package in selected_packages(&config, args.package.as_deref(), args.all)? {
                 let ctx = Context::new(&config, &package)?;
-                build(&ctx, args_for_build(&args))?;
+                if let Err(err) = plan::run_build(&ctx, &args) {
+                    if args.continue_on_error {
+                        failures.push(format!("{package}: {err}"));
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+            if !failures.is_empty() {
+                return Err(failures.join("\n").into());
             }
         }
         Commands::Install(args) => {
+            let mut failures = Vec::new();
             for package in selected_packages(&config, args.package.as_deref(), args.all)? {
                 let ctx = Context::new(&config, &package)?;
-                build(&ctx, args_for_install_build(&ctx, &args)?)?;
-                install(
-                    &ctx,
-                    BuildProfile::from_release(args.release),
-                    args.scope,
-                    &args.target,
-                )?;
+                if let Err(err) = plan::run_install(&ctx, &args) {
+                    if args.continue_on_error {
+                        failures.push(format!("{package}: {err}"));
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+            if !failures.is_empty() {
+                return Err(failures.join("\n").into());
             }
         }
         Commands::Uninstall(args) => {
+            let mut failures = Vec::new();
             for package in selected_packages(&config, args.package.as_deref(), args.all)? {
                 let ctx = Context::new(&config, &package)?;
-                uninstall(&ctx, args.scope, &args.target, args.dry_run)?;
+                if let Err(err) = plan::run_uninstall(&ctx, &args) {
+                    if args.continue_on_error {
+                        failures.push(format!("{package}: {err}"));
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+            if !failures.is_empty() {
+                return Err(failures.join("\n").into());
             }
         }
         Commands::Validate(args) => {
+            let mut failures = Vec::new();
             for package in selected_packages(&config, args.package.as_deref(), args.all)? {
                 let ctx = Context::new(&config, &package)?;
-                build(&ctx, args_for_validate_build(&ctx, &args)?)?;
-                validate(&ctx, BuildProfile::from_release(args.release), &args.target)?;
+                if let Err(err) = plan::run_validate(&ctx, &args) {
+                    if args.continue_on_error {
+                        failures.push(format!("{package}: {err}"));
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+            if !failures.is_empty() {
+                return Err(failures.join("\n").into());
             }
         }
         Commands::Launch(args) => {
             let package = selected_package(&config, args.package.as_deref())?;
             let ctx = Context::new(&config, &package)?;
-            build(&ctx, args_for_launch_build(&args))?;
+            // Validate product selection before the implicit standalone build.
+            // A typo in --plugin-id is independent of artifacts and should not
+            // spend time configuring CMake or building wrapper dependencies.
+            commands::ensure_launch_target_exists(&ctx, args.plugin_id.as_deref())?;
+            plan::run_build(&ctx, &args_for_launch_build(&args))?;
             launch(
                 &ctx,
                 BuildProfile::from_release(args.release),
@@ -83,6 +122,29 @@ pub fn run(config: XtaskConfig) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn load_workspace_dotenv(config: &XtaskConfig) -> Result<()> {
+    let path = config.root.join(".env");
+    if !path.exists() {
+        return Ok(());
+    }
+
+    // `.env` is for project-local machine paths such as the AAX SDK. Do not
+    // override the process environment so CI variables and one-off shell
+    // overrides keep higher precedence than the repository-local file.
+    for entry in dotenvy::from_path_iter(&path)? {
+        let (key, value) = entry?;
+        if env::var_os(&key).is_none() {
+            // xtask loads .env before starting worker threads or subprocesses.
+            // Mutating the process environment at this point lets the existing
+            // command code and child processes consume one consistent source.
+            unsafe {
+                env::set_var(key, value);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -130,47 +192,18 @@ fn selected_package(config: &XtaskConfig, package: Option<&str>) -> Result<Strin
     }
 }
 
-fn args_for_build(args: &cli::BuildArgs) -> cli::BuildArgs {
-    // Build is the only command where the command object is passed onward. Strip the
-    // repository-level selection flags before handing it to template-derived build code.
+fn args_for_launch_build(args: &cli::LaunchArgs) -> cli::BuildArgs {
+    // launch is not "build the package defaults, then open an app"; it needs
+    // exactly the standalone terminal task and its dependencies. Using the same
+    // DAG entrypoint as `xtask build` keeps dependency behavior aligned without
+    // accidentally pulling in supported plugin formats such as AAX.
     cli::BuildArgs {
         package: None,
         all: false,
         release: args.release,
-        clean: args.clean,
-        target: args.target.clone(),
-    }
-}
-
-fn args_for_install_build(ctx: &Context, args: &cli::InstallArgs) -> Result<cli::BuildArgs> {
-    let targets = resolve_plugin_targets(ctx.platform, &args.target)?
-        .into_iter()
-        .map(|target| target.target())
-        .collect();
-    Ok(args_for_implicit_build(args.release, targets))
-}
-
-fn args_for_validate_build(ctx: &Context, args: &cli::ValidateArgs) -> Result<cli::BuildArgs> {
-    let mut targets = resolve_validate_targets(ctx.platform, &args.target)?
-        .into_iter()
-        .map(|target| target.target())
-        .collect::<Vec<_>>();
-    if !targets.contains(&Target::Clap) {
-        targets.push(Target::Clap);
-    }
-    Ok(args_for_implicit_build(args.release, targets))
-}
-
-fn args_for_launch_build(args: &cli::LaunchArgs) -> cli::BuildArgs {
-    args_for_implicit_build(args.release, vec![Target::Standalone])
-}
-
-fn args_for_implicit_build(release: bool, target: Vec<Target>) -> cli::BuildArgs {
-    cli::BuildArgs {
-        package: None,
-        all: false,
-        release,
         clean: false,
-        target,
+        dry_run: false,
+        continue_on_error: false,
+        target: vec![targets::Target::Standalone],
     }
 }

@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::Result;
+use crate::targets::PluginFormat;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PluginMetadata {
@@ -21,6 +22,10 @@ pub(crate) struct PluginMetadata {
     pub(crate) support_url: String,
     pub(crate) description: String,
     pub(crate) copyright: String,
+    // Product-level plugin format policy. xtask uses this for default build,
+    // install, and validate selections so AAX adoption is decided once in
+    // metadata instead of repeated on every command line.
+    pub(crate) supported_formats: Vec<PluginFormat>,
     pub(crate) plugins: Vec<PluginProductMetadata>,
     pub(crate) validation: ValidationMetadata,
 }
@@ -83,6 +88,7 @@ impl PluginMetadata {
             support_url: wrac.support_url,
             description: wrac.description,
             copyright: wrac.copyright,
+            supported_formats: wrac.supported_formats,
             plugins: wrac.plugins,
             validation: wrac.validation.unwrap_or_default(),
         };
@@ -132,6 +138,22 @@ impl PluginMetadata {
         validate_required("package.metadata.wrac.support_url", &self.support_url)?;
         validate_required("package.metadata.wrac.description", &self.description)?;
         validate_required("package.metadata.wrac.copyright", &self.copyright)?;
+        if self.supported_formats.is_empty() {
+            return Err("package.metadata.wrac.supported_formats must not be empty".into());
+        }
+        // Treat duplicates as metadata errors rather than silently deduplicating:
+        // supported_formats is commercial product policy, so ambiguity here is
+        // more likely to hide a setup mistake than help a caller.
+        let mut supported_formats = HashSet::new();
+        for format in &self.supported_formats {
+            if !supported_formats.insert(*format) {
+                return Err(format!(
+                    "duplicate package.metadata.wrac.supported_formats entry: {}",
+                    format.display()
+                )
+                .into());
+            }
+        }
         if self.plugins.is_empty() {
             return Err("package.metadata.wrac.plugins must contain at least one plugin".into());
         }
@@ -325,6 +347,7 @@ struct WracMetadata {
     support_url: String,
     description: String,
     copyright: String,
+    supported_formats: Vec<PluginFormat>,
     #[serde(default)]
     plugins: Vec<PluginProductMetadata>,
     validation: Option<ValidationMetadata>,
