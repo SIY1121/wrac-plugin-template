@@ -910,6 +910,9 @@ fn run_aax_validator_dsh(ctx: &Context, aax: &Path, results_dir: &Path) -> Resul
 
 fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Result<()> {
     let dtt = ensure_aax_validator_dtt(ctx)?;
+    let aax_search_dir = aax
+        .parent()
+        .ok_or_else(|| format!("AAX bundle path has no parent directory: {}", aax.display()))?;
     println!("========== Running command ==========");
     println!("$ {}", dtt.display());
 
@@ -923,7 +926,9 @@ fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Resul
         // Avid ships DTT as the automatable scripting layer for DigiShell. The
         // Windows DSH process can launch in hosted CI while ignoring direct stdin,
         // so Windows validation goes through DTT instead of treating DSH like a
-        // plain pipe-oriented CLI.
+        // plain pipe-oriented CLI. The bundled ValidatorRunAllTests script discovers
+        // plug-ins via `findaaxplugins`, which returns the expected list shape when
+        // given a search directory rather than the `.aaxplugin` bundle path itself.
         let child = Command::new(&dtt)
             .arg("--script")
             .arg("ValidatorRunAllTests")
@@ -931,7 +936,7 @@ fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Resul
             .arg("--no_move_options")
             .arg("--disable_digitrace")
             .arg("--arg")
-            .arg(format!("pi_path={}", aax.display()))
+            .arg(format!("pi_path={}", aax_search_dir.display()))
             .arg("--arg")
             .arg(format!("out_path={}", test_dir.display()))
             .arg("--arg")
