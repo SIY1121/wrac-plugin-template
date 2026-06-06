@@ -1,3 +1,4 @@
+use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 
@@ -28,6 +29,7 @@ pub struct XtaskConfig {
 }
 
 pub fn run(config: XtaskConfig) -> Result<()> {
+    load_workspace_dotenv(&config)?;
     let cli = Cli::parse();
 
     match cli.command {
@@ -120,6 +122,29 @@ pub fn run(config: XtaskConfig) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn load_workspace_dotenv(config: &XtaskConfig) -> Result<()> {
+    let path = config.root.join(".env");
+    if !path.exists() {
+        return Ok(());
+    }
+
+    // `.env` is for project-local machine paths such as the AAX SDK. Do not
+    // override the process environment so CI variables and one-off shell
+    // overrides keep higher precedence than the repository-local file.
+    for entry in dotenvy::from_path_iter(&path)? {
+        let (key, value) = entry?;
+        if env::var_os(&key).is_none() {
+            // xtask loads .env before starting worker threads or subprocesses.
+            // Mutating the process environment at this point lets the existing
+            // command code and child processes consume one consistent source.
+            unsafe {
+                env::set_var(key, value);
+            }
+        }
+    }
     Ok(())
 }
 

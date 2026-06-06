@@ -48,7 +48,7 @@ git submodule update --init --recursive
 
 Submodules are not needed if you are only building CLAP.
 The SDK submodules used by clap-wrapper are required when building VST3 / AU, building the development standalone app, or validating VST3 / AU.
-AAX builds additionally require the private AAX SDK. Set `AAX_SDK_ROOT` to the extracted SDK root directory. See [AAX Build and Validation](aax.md).
+AAX builds additionally require the private AAX SDK. Put local AAX paths in `.env`; see [AAX Build and Validation](aax.md).
 
 ### 2. Configure Plugin Identity
 

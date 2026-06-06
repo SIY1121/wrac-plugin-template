@@ -23,8 +23,10 @@ use crate::validation::validate_wrac_rules;
 const CLAP_VALIDATOR_VERSION: &str = "0.3.2";
 // Keep the local AAX contract explicit instead of delegating to the validator's
 // broad `runtests` collection. `runtests` includes hardware/DSP and page-table
-// coverage that this source-built native template does not generate, so CI should
-// fail only on the concrete native tests that the generated bundle is expected to pass.
+// XML coverage that this source-built native template does not generate, so CI
+// should fail only on the concrete native tests that the generated bundle is
+// expected to pass. The skipped IDs are still logged at runtime to make that
+// boundary visible in CI without turning docs/aax.md into a validation manual.
 const AAX_VALIDATOR_REQUIRED_TESTS: &[&str] = &[
     "info.productids",
     "info.support.audiosuite",
@@ -1096,6 +1098,9 @@ fn assert_aax_validator_results(results_dir: &Path) -> Result<()> {
     let mut failed = Vec::new();
     for (index, test_id) in AAX_VALIDATOR_REQUIRED_TESTS.iter().enumerate() {
         let result_path = aax_validator_result_path(results_dir, index, test_id);
+        // DTT's process exit is not enough for reviewable validation: the official
+        // JSON result records the test ID and validator result_status that CI logs
+        // and artifacts can be audited against.
         let status = aax_validator_result_status(&result_path)?;
         if status == "E_COMPLETED_PASS" {
             println!("AAX validator PASS: {test_id}");
@@ -1368,16 +1373,8 @@ fn normalize_windows_aax_validator_main_config(path: &Path) -> Result<()> {
 }
 
 fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
-    if let Some(root) = env::var_os("AAX_VALIDATOR_DSH_ROOT").map(PathBuf::from) {
-        return Ok(root);
-    }
-
+    let archive = aax_validator_dsh_archive(ctx)?;
     let extracted_root = ctx.target_dir.join("tools").join("aax-validator-dsh");
-    if aax_validator_dsh_executable(&extracted_root, ctx.platform).is_ok() {
-        return Ok(extracted_root);
-    }
-
-    let archive = aax_validator_dsh_archive()?;
     // Extract into target/ so CI caches or local builds can reuse the private
     // validator without committing Avid binaries to the template repository.
     remove_if_exists(&extracted_root)?;
@@ -1407,61 +1404,15 @@ fn aax_validator_dsh_root(ctx: &Context) -> Result<PathBuf> {
     Ok(extracted_root)
 }
 
-fn aax_validator_dsh_archive() -> Result<PathBuf> {
-    if let Some(archive) = env::var_os("AAX_VALIDATOR_DSH_ARCHIVE").map(PathBuf::from) {
-        ensure_exists(&archive, "AAX validator/DSH archive")?;
-        return Ok(archive);
-    }
-    // Environment variables are the reproducible path for CI. The Downloads fallback
-    // is only a local developer convenience for the exact Avid archive names.
-    let downloads = home_dir()?.join("Downloads");
-    for name in [
-        "aax-validator-dsh-2024-6-0-138bab0d-mac-arm64.tar.gz",
-        "aax-validator-dsh-2024-6-0-138bab0d-mac-x64.tar.gz",
-        "aax-validator-dsh-2024-6-0-dc68c2dd-win-x86_64.zip",
-    ] {
-        let archive = downloads.join(name);
-        if archive.exists() {
-            return Ok(archive);
-        }
-    }
-    Err("AAX validator/DSH not found. Set AAX_VALIDATOR_DSH_ROOT to the extracted validator directory or AAX_VALIDATOR_DSH_ARCHIVE to the downloaded archive.".into())
-}
-
-fn aax_validator_dsh_executable(root: &Path, platform: Platform) -> Result<PathBuf> {
-    let executable = executable_name("dsh", platform);
-    for candidate in [
-        // Avid's Windows validator ReadMe starts DigiShell from the package root.
-        // The Tools copy can launch but may not consume scripted stdin reliably on
-        // hosted CI, so prefer the root executable for Windows zip archives.
-        root.join("DigiShell").join(&executable),
-        // Zip extraction keeps the archive's top-level DigiShell directory. Include the
-        // nested Windows paths so CI can consume Avid's downloaded archive directly.
-        root.join("DigiShell")
-            .join("AAXValidatorResources")
-            .join("Tools")
-            .join(&executable),
-        // Windows validator archives place the runnable validator dish and helper
-        // executables under AAXValidatorResources/Tools. Keep it as a fallback for
-        // extracted roots supplied by users.
-        root.join("AAXValidatorResources")
-            .join("Tools")
-            .join(&executable),
-        // macOS archives expose CommandLineTools at the package root.
-        root.join("CommandLineTools").join(&executable),
-        // Some Windows archives also include a top-level dsh.exe. Keep it as a fallback
-        // for extracted roots supplied by users, but do not rely on it in CI.
-        root.join(&executable),
-    ] {
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err(format!(
-        "AAX validator DSH executable not found under {}",
-        root.display()
-    )
-    .into())
+fn aax_validator_dsh_archive(ctx: &Context) -> Result<PathBuf> {
+    let Some(archive) = env_path(ctx, "AAX_VALIDATOR_DSH_ARCHIVE")? else {
+        return Err(
+            "AAX validator/DSH archive not found. Set AAX_VALIDATOR_DSH_ARCHIVE in .env or the process environment."
+                .into(),
+        );
+    };
+    ensure_exists(&archive, "AAX validator/DSH archive")?;
+    Ok(archive)
 }
 
 fn aax_validator_dtt_runner(root: &Path, platform: Platform) -> Result<PathBuf> {
@@ -1679,36 +1630,32 @@ fn ensure_aax_sdk_input(ctx: &Context) -> Result<()> {
 }
 
 fn aax_sdk_root(ctx: &Context) -> Result<PathBuf> {
-    if let Some(root) = env::var_os("AAX_SDK_ROOT").map(PathBuf::from) {
+    if let Some(root) = env_path(ctx, "AAX_SDK_ROOT")? {
         // clap-wrapper evaluates AAX_SDK_ROOT inside its CMake project, so a relative
         // path would be resolved against clap_wrapper_builder rather than this repo.
-        // Normalize here so CI and local shells can both use repo-relative paths.
-        return Ok(if root.is_absolute() {
-            root
-        } else {
-            ctx.root.join(root)
-        });
+        // Resolve relative .env and CI paths from the repository root instead.
+        ensure_exists(&root.join("Interfaces").join("AAX.h"), "AAX SDK")?;
+        return Ok(root);
     }
 
-    // Local Avid downloads are commonly unpacked under Downloads. Environment
-    // variables remain the deterministic CI path; this fallback keeps first-run
-    // developer validation from requiring shell-profile edits.
-    let downloads = home_dir()?.join("Downloads");
-    for name in ["aax-sdk-2-9-0", "aax-sdk-2-8-1"] {
-        let root = downloads.join(name);
-        if root.join("Interfaces").join("AAX.h").exists() {
-            return Ok(root);
-        }
-    }
-
-    Err("AAX SDK not found. Set AAX_SDK_ROOT to the extracted AAX SDK root directory.".into())
+    Err("AAX SDK not found. Set AAX_SDK_ROOT in .env or the process environment.".into())
 }
 
-fn executable_name(name: &str, platform: Platform) -> String {
-    if platform == Platform::Windows {
-        format!("{name}.exe")
+fn env_path(ctx: &Context, key: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = env::var_os(key) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(Some(path))
     } else {
-        name.to_string()
+        // `.env` lives at the workspace root, and CI also runs xtask from that
+        // root. Using one base directory avoids CMake resolving relative AAX
+        // paths from clap_wrapper_builder or another subprocess directory.
+        Ok(Some(ctx.root.join(path)))
     }
 }
 

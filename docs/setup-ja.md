@@ -48,7 +48,7 @@ git submodule update --init --recursive
 
 CLAP のみをビルドする場合、サブモジュールは不要です。
 VST3 / AU、開発用 standalone app、または VST3 / AU の検証を行う場合は、clap-wrapper が利用する SDK サブモジュールが必要です。
-AAX ビルドには、加えて private な AAX SDK が必要です。展開した SDK root directory を `AAX_SDK_ROOT` で指定してください。詳細は [AAX Build and Validation](aax-ja.md) を参照してください。
+AAX ビルドには、加えて private な AAX SDK が必要です。ローカルの AAX path は `.env` に書いてください。詳細は [AAX Build and Validation](aax-ja.md) を参照してください。
 
 ### 2. プラグインの識別情報を設定する
 
