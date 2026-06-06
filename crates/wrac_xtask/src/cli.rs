@@ -23,6 +23,7 @@ Examples:
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
   xtask expands requested terminal tasks into a dependency graph before execution.
+  Explicit plugin-format targets must be listed in package.metadata.wrac.supported_formats.
   VST3/AU/AAX/standalone targets require clap-wrapper dependencies.";
 
 const INSTALL_AFTER_HELP: &str = "\
@@ -42,6 +43,7 @@ Examples:
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
   install expands the selected plugin formats into a dependency graph before copying artifacts.
+  Explicit targets must be listed in package.metadata.wrac.supported_formats.
   --scope=default installs AAX system-wide and CLAP/VST3/AU user-locally.
   standalone is not a plugin format and cannot be installed with this command.";
 
@@ -62,7 +64,9 @@ Examples:
 
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
-  --scope defaults to all and removes both user-local and system-wide plugin artifacts.";
+  Explicit targets must be listed in package.metadata.wrac.supported_formats.
+  --scope defaults to all and removes both user-local and system-wide plugin artifacts.
+  AAX has no user-local install scope, so --scope=all removes only its system-wide Avid bundle.";
 
 const VALIDATE_AFTER_HELP: &str = "\
 Targets:
@@ -81,6 +85,7 @@ Examples:
 Notes:
   -p/--package can be omitted when the workspace contains exactly one WRAC plugin package.
   validate expands the selected plugin formats into a dependency graph, runs WRAC checks, then runs external validators.
+  Explicit targets must be listed in package.metadata.wrac.supported_formats.
   WRAC check violations are errors. See docs/production-readiness-checks.md for rule IDs and disable metadata.
   CLAP validation downloads clap-validator 0.3.2 into target/tools if needed.
   VST3 validation uses the VST3 validator.
@@ -97,7 +102,8 @@ Examples:
   cargo xtask launch -p wrac_gain_plugin --release
 
 Notes:
-  launch builds standalone artifacts before starting one. Use --plugin-id when a package exposes multiple plugin products.";
+  launch builds only the standalone target and its dependencies before starting the app.
+  Use --plugin-id when a package exposes multiple plugin products; invalid IDs fail before building.";
 
 #[derive(Debug, Parser)]
 #[command(

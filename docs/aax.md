@@ -3,6 +3,7 @@
 AAX support is available on macOS and Windows when `aax` is listed in
 `package.metadata.wrac.supported_formats`. Default build, install, and validate
 commands use that metadata list; `--target=aax` requests only AAX.
+Explicit AAX targets fail when `aax` is not listed in `supported_formats`.
 
 ## Prerequisites
 
@@ -50,6 +51,9 @@ cargo xtask build --target=aax
 cargo xtask build
 ```
 
+Use `cargo xtask build --target=aax --dry-run` to inspect the task graph and
+dependency order without requiring the SDK or producing artifacts.
+
 ## Install
 
 AAX plugins install to the system-wide Avid plugin folder on macOS and Windows.
@@ -59,6 +63,9 @@ user-locally.
 ```sh
 cargo xtask install --target=aax
 ```
+
+`--scope=user` is invalid for AAX. Use `--scope=system` when you want the
+system-wide choice to be explicit.
 
 `cargo xtask uninstall` defaults to `--scope=all`; for AAX this resolves to the
 system-wide Avid plugin folder because there is no user-local AAX install scope.
@@ -77,6 +84,9 @@ JSON results under `target/wrac-plugins/<package>/wrac/validation/aax/`.
 the package's documented automation layer for DigiShell and behaves consistently
 in local shells and hosted CI.
 `xtask` fails when any selected test reports a non-pass `result_status`.
+With `--continue-on-error`, failed AAX validation still returns a non-zero exit
+status but allows independent package/format tasks to continue; downstream AAX
+tasks that depend on the failed task are skipped.
 
 The local validation target intentionally skips:
 

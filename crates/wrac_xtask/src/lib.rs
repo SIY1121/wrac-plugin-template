@@ -14,7 +14,7 @@ mod util;
 mod validation;
 
 use cli::{Cli, Commands};
-use commands::{build, clean, launch};
+use commands::{clean, launch};
 use context::{Context, available_packages};
 use profile::BuildProfile;
 
@@ -101,7 +101,11 @@ pub fn run(config: XtaskConfig) -> Result<()> {
         Commands::Launch(args) => {
             let package = selected_package(&config, args.package.as_deref())?;
             let ctx = Context::new(&config, &package)?;
-            build(&ctx, args_for_launch_build(&args))?;
+            // Validate product selection before the implicit standalone build.
+            // A typo in --plugin-id is independent of artifacts and should not
+            // spend time configuring CMake or building wrapper dependencies.
+            commands::ensure_launch_target_exists(&ctx, args.plugin_id.as_deref())?;
+            plan::run_build(&ctx, &args_for_launch_build(&args))?;
             launch(
                 &ctx,
                 BuildProfile::from_release(args.release),
@@ -164,17 +168,17 @@ fn selected_package(config: &XtaskConfig, package: Option<&str>) -> Result<Strin
 }
 
 fn args_for_launch_build(args: &cli::LaunchArgs) -> cli::BuildArgs {
-    args_for_implicit_build(args.release, vec![targets::Target::Standalone])
-}
-
-fn args_for_implicit_build(release: bool, target: Vec<targets::Target>) -> cli::BuildArgs {
+    // launch is not "build the package defaults, then open an app"; it needs
+    // exactly the standalone terminal task and its dependencies. Using the same
+    // DAG entrypoint as `xtask build` keeps dependency behavior aligned without
+    // accidentally pulling in supported plugin formats such as AAX.
     cli::BuildArgs {
         package: None,
         all: false,
-        release,
+        release: args.release,
         clean: false,
         dry_run: false,
         continue_on_error: false,
-        target,
+        target: vec![targets::Target::Standalone],
     }
 }

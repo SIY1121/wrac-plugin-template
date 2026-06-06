@@ -109,6 +109,8 @@ cargo xtask install
 `cargo xtask install` expands the selected plugin formats into a task graph before installing them.
 Use `-p/--package` with the Cargo package name when the workspace contains multiple WRAC plugin packages.
 Default plugin formats come from `package.metadata.wrac.supported_formats`.
+`cargo xtask build` uses the same plugin-format defaults and also builds the development standalone app.
+`cargo xtask validate` uses the same plugin-format defaults and builds any artifacts required by the selected validators.
 `cargo xtask install --scope=default` installs CLAP/VST3/AU to user-local paths and AAX to the system-wide Avid plugin folder.
 Use `cargo xtask install --scope=system` for hosts that only scan system-wide plugin folders.
 The `--target` option accepts `clap`, `vst3`, `au`, and `aax` as comma-separated values.
@@ -140,6 +142,8 @@ Attaching a debugger to a DAW can be difficult, so we recommend debugging with t
 In VS Code, select the "Debug gain plugin standalone" configuration and run it.
 
 The standalone app is a lightweight development host, not a release plugin format or shipping artifact.
+`cargo xtask launch` builds only the standalone target and its dependencies before opening the app.
+If the package exposes multiple plugin products, pass `--plugin-id`; invalid plugin IDs fail before building.
 
 > **Note:** Audio feedback is present in standalone mode. **Use headphones.**
 

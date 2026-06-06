@@ -459,6 +459,11 @@ fn build_graph(
     }
 
     if needs_vst3 || needs_au {
+        // VST3 and AU intentionally share the default Rust staticlib. Older
+        // WRY_OBJC_SUFFIX-based builds needed per-format Rust builds for
+        // Objective-C class names, but current wxp/wry embeds the source ID into
+        // objc2-generated class names. Split this again only if per-format
+        // compile-time inputs return.
         // Configure the private-SDK-free wrapper project with the full native
         // plugin target set for this platform, then build only the DAG-selected
         // CMake target below. This avoids flipping the same CMake cache between

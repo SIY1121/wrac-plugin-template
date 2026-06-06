@@ -60,10 +60,6 @@ impl Target {
             Self::Standalone => "Standalone",
         }
     }
-
-    pub(crate) fn is_wrapper(self) -> bool {
-        matches!(self, Self::Vst3 | Self::Au | Self::Aax)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -176,15 +172,6 @@ impl Platform {
         }
     }
 
-    pub(crate) fn default_build_targets(self) -> Vec<Target> {
-        // An unspecified build produces everything a developer would expect for that OS.
-        match self {
-            Self::Macos => vec![Target::Clap, Target::Vst3, Target::Au, Target::Standalone],
-            Self::Windows => vec![Target::Clap, Target::Vst3, Target::Standalone],
-            Self::Linux => vec![Target::Clap, Target::Vst3, Target::Standalone],
-        }
-    }
-
     pub(crate) fn cmake_generator(self) -> Option<&'static str> {
         match self {
             Self::Macos => Some("Xcode"),
@@ -207,39 +194,4 @@ impl Platform {
             Self::Macos | Self::Linux => format!("lib{crate_name}.a"),
         }
     }
-}
-
-pub(crate) fn resolve_build_targets(
-    platform: Platform,
-    requested: &[Target],
-) -> Result<Vec<Target>> {
-    let targets = if requested.is_empty() {
-        platform.default_build_targets()
-    } else {
-        requested.to_vec()
-    };
-
-    for target in &targets {
-        if !platform.supports_target(*target) {
-            return Err(format!(
-                "{} is not supported on this operating system",
-                target.display()
-            )
-            .into());
-        }
-    }
-
-    Ok(dedup(targets))
-}
-
-fn dedup<T: Copy + PartialEq>(targets: Vec<T>) -> Vec<T> {
-    // Allow duplicate inputs such as `--target=vst3,vst3` from the CLI.
-    // Deduplicate while preserving order rather than erroring, to be lenient toward script callers.
-    let mut unique = Vec::new();
-    for target in targets {
-        if !unique.contains(&target) {
-            unique.push(target);
-        }
-    }
-    unique
 }

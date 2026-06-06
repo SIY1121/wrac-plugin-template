@@ -45,8 +45,8 @@ For the prerequisites to build VST3 / AU / AAX or the development standalone app
 git clone https://github.com/novonotes/wrac-plugin-template.git
 cd wrac-plugin-template
 
-# Build and install the plugin
-# Change the --target argument if you need AU or VST3
+# Build and install CLAP only for the minimal first run.
+# Run `cargo xtask install` to install every format declared in supported_formats.
 cargo xtask install --target=clap
 
 # Debug builds load the GUI from the Vite dev server, so start it before launching your DAW
@@ -117,8 +117,9 @@ Supported plugin formats:
 | Linux | CLAP / VST3 |
 
 Default build, install, and validate targets come from `package.metadata.wrac.supported_formats`.
-Use `--target` to request a specific subset; explicit targets must be listed in `supported_formats`.
-For build/debug commands, the `--target` option also accepts `standalone` as a development-only target.
+Use `--target` to request a specific subset; explicit plugin-format targets must be listed in `supported_formats`.
+`cargo xtask build` also builds the development standalone app by default, and the build command accepts `standalone` as a development-only target.
+Use `--dry-run` on build/install/validate commands to inspect the task graph before running it.
 
 For detailed usage:
 

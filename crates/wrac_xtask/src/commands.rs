@@ -9,13 +9,11 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::Result;
-use crate::cli::{BuildArgs, InstallScope, UninstallScope};
+use crate::cli::{InstallScope, UninstallScope};
 use crate::context::Context;
 use crate::metadata::PluginMetadata;
 use crate::profile::BuildProfile;
-use crate::targets::{
-    Platform, PluginFormat, PluginTarget, Target, ValidateTarget, resolve_build_targets,
-};
+use crate::targets::{Platform, PluginFormat, PluginTarget, Target, ValidateTarget};
 use crate::util::{
     common_program_files, copy_path, ensure_exists, env_value_or, home_dir, local_app_data, on_off,
     remove_if_exists, run,
@@ -52,70 +50,6 @@ const AAX_VALIDATOR_SKIPPED_TESTS: &[(&str, &str)] = &[
     ),
 ];
 const AAX_VALIDATOR_TIMEOUT_SECS: u64 = 15 * 60;
-
-pub(crate) fn build(ctx: &Context, args: BuildArgs) -> Result<()> {
-    let profile = BuildProfile::from_release(args.release);
-    let targets = resolve_build_targets(ctx.platform, &args.target)?;
-
-    // Missing wrapper inputs surface as CMake errors after npm/cargo have already run,
-    // making the root cause hard to diagnose. Check wrapper inputs upfront only
-    // when the selected targets require a wrapper.
-    if targets.iter().any(|target| target.is_wrapper()) || targets.contains(&Target::Standalone) {
-        ensure_wrapper_inputs(
-            ctx,
-            targets.contains(&Target::Vst3),
-            targets.contains(&Target::Au),
-            targets.contains(&Target::Aax),
-        )?;
-    }
-
-    if args.clean {
-        clean(ctx)?;
-    }
-
-    build_gui(ctx)?;
-
-    let mut default_rust_plugin_built = false;
-    if targets.contains(&Target::Clap) {
-        build_rust_plugin(ctx, profile, RustPluginBuild::Default)?;
-        default_rust_plugin_built = true;
-        package_clap(ctx, profile)?;
-    }
-
-    if targets.contains(&Target::Vst3) || targets.contains(&Target::Au) {
-        // In the old WRY_OBJC_SUFFIX era, VST3 and AU each required a separate Rust
-        // staticlib so their Objective-C class names could differ per format. The current
-        // wxp/wry embeds the wry source ID into objc2's auto-generated class names, so a
-        // single staticlib can be shared by both VST3 and AU in the same product build.
-        // Do not split again unless per-format compile-time inputs are reintroduced.
-        if !default_rust_plugin_built {
-            build_rust_plugin(ctx, profile, RustPluginBuild::Default)?;
-        }
-        build_wrapper_set(
-            ctx,
-            profile,
-            WrapperBuild::Plugins {
-                vst3: targets.contains(&Target::Vst3),
-                au: targets.contains(&Target::Au),
-            },
-        )?;
-    }
-
-    if targets.contains(&Target::Aax) {
-        if !default_rust_plugin_built {
-            build_rust_plugin(ctx, profile, RustPluginBuild::Default)?;
-        }
-        build_wrapper_set(ctx, profile, WrapperBuild::Aax)?;
-    }
-
-    if targets.contains(&Target::Standalone) {
-        build_rust_plugin(ctx, profile, RustPluginBuild::Standalone)?;
-        build_wrapper_set(ctx, profile, WrapperBuild::Standalone)?;
-    }
-
-    print_outputs(ctx, profile, &targets);
-    Ok(())
-}
 
 pub(crate) fn build_gui(ctx: &Context) -> Result<()> {
     println!("Building GUI...");
@@ -288,16 +222,29 @@ impl WrapperBuild {
     }
 }
 
-fn build_wrapper_set(ctx: &Context, profile: BuildProfile, build: WrapperBuild) -> Result<()> {
-    configure_wrapper(ctx, profile, build)?;
-    build_wrapper_all(ctx, profile, build)
-}
-
 pub(crate) fn configure_wrapper(
     ctx: &Context,
     profile: BuildProfile,
     build: WrapperBuild,
 ) -> Result<()> {
+    // Keep SDK/submodule diagnostics close to the configure task even when the
+    // DAG was created by install, validate, or launch. Checking before the CMake
+    // stamp shortcut avoids silently relying on a stale cache after an SDK
+    // directory was removed or a submodule was never initialized on this machine.
+    ensure_common_wrapper_inputs(ctx)?;
+    match build {
+        WrapperBuild::Plugins { vst3, au } => {
+            if vst3 {
+                ensure_vst3_sdk_input(ctx)?;
+            }
+            if au {
+                ensure_au_sdk_input(ctx)?;
+            }
+        }
+        WrapperBuild::Aax => ensure_aax_sdk_input(ctx)?,
+        WrapperBuild::Standalone => {}
+    }
+
     let rust_build = build.rust_build();
     let static_library = rust_build.static_library(ctx, profile);
     ensure_exists(&static_library, "static plugin library")?;
@@ -512,26 +459,6 @@ pub(crate) fn build_wrapper_target(
     Ok(())
 }
 
-fn build_wrapper_all(ctx: &Context, profile: BuildProfile, build: WrapperBuild) -> Result<()> {
-    match build {
-        WrapperBuild::Plugins { vst3, au } => {
-            if vst3 {
-                build_wrapper_target(ctx, profile, build, WrapperTarget::Vst3)?;
-            }
-            if au {
-                build_wrapper_target(ctx, profile, build, WrapperTarget::Au)?;
-            }
-        }
-        WrapperBuild::Aax => {
-            build_wrapper_target(ctx, profile, build, WrapperTarget::Aax)?;
-        }
-        WrapperBuild::Standalone => {
-            build_wrapper_target(ctx, profile, build, WrapperTarget::Standalone)?;
-        }
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum WrapperTarget {
     Vst3,
@@ -720,6 +647,13 @@ pub(crate) fn launch(ctx: &Context, profile: BuildProfile, plugin_id: Option<&st
         Platform::Windows | Platform::Linux => run(&mut Command::new(&artifact))?,
     }
     Ok(())
+}
+
+pub(crate) fn ensure_launch_target_exists(ctx: &Context, plugin_id: Option<&str>) -> Result<()> {
+    // Launch has to build the standalone app before opening it, but an invalid
+    // product selection is independent of build artifacts. Check it upfront so
+    // typos in --plugin-id do not trigger a full standalone build.
+    standalone_plugin_to_launch(ctx, plugin_id).map(|_| ())
 }
 
 fn standalone_plugin_to_launch<'a>(
@@ -1702,12 +1636,7 @@ pub(crate) fn clean(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_wrapper_inputs(
-    ctx: &Context,
-    needs_vst3: bool,
-    needs_au: bool,
-    needs_aax: bool,
-) -> Result<()> {
+fn ensure_common_wrapper_inputs(ctx: &Context) -> Result<()> {
     // Missing subtree files or uninitialized SDK submodules otherwise surface as opaque CMake errors.
     // Check the sentinel files the wrapper actually reads.
     ensure_exists(&ctx.wrapper_dir, "clap_wrapper_builder directory")?;
@@ -1723,33 +1652,28 @@ pub(crate) fn ensure_wrapper_inputs(
             .join("clap.h"),
         "CLAP SDK submodule",
     )?;
-    if needs_vst3 {
-        ensure_vst3_sdk_input(ctx)?;
-    }
-    if needs_au {
-        ensure_exists(
-            &ctx.wrapper_dir
-                .join("AudioUnitSDK")
-                .join("include")
-                .join("AudioUnitSDK")
-                .join("AudioUnitSDK.h"),
-            "AudioUnitSDK submodule",
-        )?;
-    }
-    if needs_aax {
-        ensure_aax_sdk_input(ctx)?;
-    }
     Ok(())
 }
 
-pub(crate) fn ensure_vst3_sdk_input(ctx: &Context) -> Result<()> {
+fn ensure_vst3_sdk_input(ctx: &Context) -> Result<()> {
     ensure_exists(
         &ctx.wrapper_dir.join("vst3sdk").join("CMakeLists.txt"),
         "VST3 SDK submodule",
     )
 }
 
-pub(crate) fn ensure_aax_sdk_input(ctx: &Context) -> Result<()> {
+fn ensure_au_sdk_input(ctx: &Context) -> Result<()> {
+    ensure_exists(
+        &ctx.wrapper_dir
+            .join("AudioUnitSDK")
+            .join("include")
+            .join("AudioUnitSDK")
+            .join("AudioUnitSDK.h"),
+        "AudioUnitSDK submodule",
+    )
+}
+
+fn ensure_aax_sdk_input(ctx: &Context) -> Result<()> {
     let root = aax_sdk_root(ctx)?;
     ensure_exists(&root.join("Interfaces").join("AAX.h"), "AAX SDK")
 }
