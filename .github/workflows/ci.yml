@@ -167,15 +167,11 @@ jobs:
     name: AAX Validator
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     env:
       CARGO_HTTP_MULTIPLEXING: false
       AAX_SDK_ARCHIVE_URL: ${{ vars.AAX_SDK_ARCHIVE_URL || secrets.AAX_SDK_ARCHIVE_URL }}
       AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL || secrets.AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL }}
       AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL || secrets.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL }}
-    # AAX uses private Avid downloads, so this job is intentionally kept out of
-    # fork pull-request CI. Maintainers can run it with workflow_dispatch before
-    # merging, and protected-branch pushes validate the same contract after merge.
     strategy:
       fail-fast: false
       matrix:
