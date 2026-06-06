@@ -853,7 +853,9 @@ fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Resul
             results_dir
                 .join("dtt")
                 .join(format!("{:02}-{}", index + 1, test_id.replace('.', "_")));
+        let log_dir = test_dir.join("logs");
         fs::create_dir_all(&test_dir)?;
+        fs::create_dir_all(&log_dir)?;
 
         // Avid ships DTT as the automatable scripting layer for DigiShell, and it
         // behaves consistently across macOS and Windows CI. The bundled
@@ -866,6 +868,9 @@ fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Resul
             .arg("--no_pref_delete")
             .arg("--no_move_options")
             .arg("--disable_digitrace")
+            .arg("--verbose")
+            .arg("--logdir")
+            .arg(&log_dir)
             .arg("--arg")
             .arg(format!("pi_path={}", aax_search_dir.display()))
             .arg("--arg")
@@ -897,6 +902,7 @@ fn run_aax_validator_dtt(ctx: &Context, aax: &Path, results_dir: &Path) -> Resul
         if !output.status.success() {
             print_aax_validator_output(&output.stdout, &output.stderr);
             print_aax_validator_result(&result_path)?;
+            print_aax_validator_dtt_logs(&log_dir)?;
             return Err(format!(
                 "AAX validator/DTT failed while running {test_id}; see {} and {}",
                 stdout_path.display(),
@@ -1044,6 +1050,67 @@ fn print_aax_validator_result(path: &Path) -> Result<()> {
         path.display()
     );
     println!("{content}");
+    Ok(())
+}
+
+fn print_aax_validator_dtt_logs(log_dir: &Path) -> Result<()> {
+    for path in collect_files(log_dir)? {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with(".txt") {
+            continue;
+        }
+        let content = fs::read_to_string(&path).map_err(|err| {
+            format!(
+                "failed to read AAX validator DTT log {}: {err}",
+                path.display()
+            )
+        })?;
+        println!(
+            "========== AAX validator DTT log ({}) ==========",
+            path.display()
+        );
+        let max_len = 64 * 1024;
+        if content.len() > max_len {
+            let split = content
+                .char_indices()
+                .map(|(index, _)| index)
+                .take_while(|index| *index <= max_len)
+                .last()
+                .unwrap_or(0);
+            println!("{}", &content[..split]);
+            println!(
+                "... truncated {} bytes from {}",
+                content.len() - split,
+                path.display()
+            );
+        } else {
+            println!("{content}");
+        }
+    }
+    Ok(())
+}
+
+fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    collect_files_inner(root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_files_inner(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(path)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_files_inner(&path, files)?;
+        } else {
+            files.push(path);
+        }
+    }
     Ok(())
 }
 
