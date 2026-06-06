@@ -167,11 +167,12 @@ jobs:
     name: AAX Validator
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     env:
       CARGO_HTTP_MULTIPLEXING: false
-      AAX_SDK_ARCHIVE_URL: ${{ vars.AAX_SDK_ARCHIVE_URL || secrets.AAX_SDK_ARCHIVE_URL || 'https://files.novonotes.download/libs/aax-sdk-2-9-0.zip' }}
-      AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL || secrets.AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL || 'https://files.novonotes.download/libs/aax-validator-dsh-2024-6-0-138bab0d-mac-arm64.tar.gz' }}
-      AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL || secrets.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL || 'https://files.novonotes.download/libs/aax-validator-dsh-2024-6-0-dc68c2dd-win-x86_64.zip' }}
+      AAX_SDK_ARCHIVE_URL: ${{ vars.AAX_SDK_ARCHIVE_URL || secrets.AAX_SDK_ARCHIVE_URL }}
+      AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL || secrets.AAX_VALIDATOR_MAC_ARM64_ARCHIVE_URL }}
+      AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL: ${{ vars.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL || secrets.AAX_VALIDATOR_WINDOWS_X86_64_ARCHIVE_URL }}
     strategy:
       fail-fast: false
       matrix:
