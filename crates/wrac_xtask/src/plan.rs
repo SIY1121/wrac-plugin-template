@@ -17,6 +17,11 @@ use crate::context::Context;
 use crate::profile::BuildProfile;
 use crate::targets::{PluginFormat, PluginTarget, Target, ValidateTarget};
 
+/// How the executor treats a task failure after the graph has already been planned.
+///
+/// This is intentionally not a target-selection policy. Unsupported targets,
+/// invalid scopes, missing SDKs, build failures, and validator failures are all
+/// represented as task failures so the same downstream-skip rule applies.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum FailurePolicy {
     FailFast,
@@ -30,6 +35,11 @@ enum CommandKind {
     Validate,
 }
 
+/// Stable user-facing task identity.
+///
+/// `NodeIndex` is only an implementation detail of petgraph. Keeping reports,
+/// skip reasons, and dry-run output on these string IDs prevents graph insertion
+/// order changes from leaking into user-visible diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TaskId(String);
 
@@ -169,6 +179,9 @@ impl TaskGraph {
     }
 
     fn task(&mut self, id: TaskId, kind: TaskKind) -> NodeIndex {
+        // Multiple terminal tasks often share dependencies, for example VST3
+        // and AAX both need the default Rust staticlib. Reusing the existing
+        // node here is what keeps the plan a DAG instead of a duplicated tree.
         if let Some(index) = self.nodes.get(&id) {
             return *index;
         }
@@ -188,6 +201,9 @@ impl TaskGraph {
     }
 
     fn ordered(&self) -> Result<Vec<NodeIndex>> {
+        // petgraph's generic toposort is correct but its peer ordering is tied
+        // to traversal internals. Use a tiny stable topological sort so dry-run
+        // output and CI logs stay reviewable as task definitions evolve.
         let mut incoming = self
             .graph
             .node_indices()
@@ -233,6 +249,8 @@ impl TaskGraph {
 pub(crate) fn run_build(ctx: &Context, args: &BuildArgs) -> Result<()> {
     let profile = BuildProfile::from_release(args.release);
     let targets = resolve_build_targets_from_metadata(ctx, &args.target)?;
+    // The command only chooses terminal build tasks. The graph builder expands
+    // those into Rust, wrapper-configure, and format-specific build tasks.
     let graph = build_graph(ctx, CommandKind::Build, &targets, args.clean, None)?;
     execute_plan(
         ctx,
@@ -302,6 +320,9 @@ pub(crate) fn run_validate(ctx: &Context, args: &ValidateArgs) -> Result<()> {
         .iter()
         .map(|target| target.target())
         .collect::<Vec<_>>();
+    // Validate does not "call build" as a special case. It asks for validation
+    // terminal tasks, and the dependency graph pulls in exactly the build and
+    // install tasks those validators need.
     let graph = build_graph(
         ctx,
         CommandKind::Validate,
@@ -343,6 +364,9 @@ fn build_graph(
     install_selection: Option<InstallSelection>,
 ) -> Result<TaskGraph> {
     let mut graph = TaskGraph::new();
+    // Install scope validation is modeled as a task, not an upfront global
+    // preflight. With --continue-on-error, an invalid AAX user install scope can
+    // skip only AAX while unrelated CLAP/VST3/AU installs continue.
     let install_checks = install_selection
         .as_ref()
         .filter(|_| matches!(command, CommandKind::Install))
@@ -369,6 +393,8 @@ fn build_graph(
     let needs_au = targets.contains(&Target::Au);
     let needs_aax = targets.contains(&Target::Aax);
     let needs_standalone = targets.contains(&Target::Standalone);
+    // CLAP/VST3/AU/AAX all use the default Rust plugin build. CLAP consumes the
+    // cdylib, while wrapper formats link the staticlib from the same cargo run.
     let needs_default = targets.iter().any(|target| {
         matches!(
             target,
@@ -401,6 +427,8 @@ fn build_graph(
     };
 
     let rust_standalone = if needs_standalone {
+        // Standalone uses a separate cargo target directory because wrapper app
+        // dependencies and debug artifacts should not contaminate plugin builds.
         let rust_standalone = graph.task(
             package_task_id(ctx, "build-rust-standalone"),
             TaskKind::BuildRustStandalone,
@@ -416,6 +444,9 @@ fn build_graph(
 
     let mut build_by_target = HashMap::new();
     if targets.contains(&Target::Clap) || matches!(command, CommandKind::Validate) {
+        // WRAC production-readiness checks read the CLAP schema, so validation
+        // always packages CLAP even when the requested external validator is VST3,
+        // AU, or AAX.
         let clap = graph.task(package_task_id(ctx, "package-clap"), TaskKind::PackageClap);
         graph.depends_on(
             clap,
@@ -428,6 +459,8 @@ fn build_graph(
     }
 
     if needs_vst3 || needs_au {
+        // Keep AAX out of this configure group. AAX requires a private SDK, and
+        // VST3/AU-only builds must not fail just because AAX inputs are absent.
         let configure = graph.task(
             package_task_id(ctx, "configure-wrapper-plugins"),
             TaskKind::ConfigureWrapperPlugins {
@@ -460,6 +493,9 @@ fn build_graph(
     }
 
     if needs_aax {
+        // AAX gets its own CMake build directory because the target set and SDK
+        // root are configure-time inputs. Sharing one wrapper cache with VST3/AU
+        // would recreate the old "last command wins" CMake state problem.
         let configure = graph.task(
             package_task_id(ctx, "configure-wrapper-aax"),
             TaskKind::ConfigureWrapperAax,
@@ -498,6 +534,9 @@ fn build_graph(
         CommandKind::Install => {
             let install_selection = install_selection.expect("install graph needs selection");
             for target in install_selection.targets {
+                // Install tasks depend on their concrete format build task, not
+                // on a broad "build all" node. This lets --continue-on-error skip
+                // only the affected format when another format fails.
                 let install = graph.task(
                     package_task_id(ctx, &format!("install-{target:?}")),
                     TaskKind::InstallBundle {
@@ -534,6 +573,10 @@ fn build_graph(
                 );
                 graph.depends_on(validate, rules);
                 if target == ValidateTarget::Au {
+                    // auval discovers Audio Units through AudioComponentRegistrar
+                    // instead of taking a bundle path. Model the user-local AU
+                    // install as a real dependency so validate-AU cannot observe
+                    // a stale or missing component.
                     let install = graph.task(
                         package_task_id(ctx, "install-Au-for-validation"),
                         TaskKind::InstallBundle {
@@ -572,6 +615,9 @@ fn execute_plan(
     let mut failures = Vec::new();
 
     for index in ordered {
+        // A failed dependency makes the dependent task meaningless, so continuing
+        // never tries to run downstream work with missing artifacts. Independent
+        // branches still run under FailurePolicy::Continue.
         let failed_deps = graph
             .graph
             .neighbors_directed(index, Direction::Incoming)
@@ -748,6 +794,8 @@ fn print_summary(graph: &TaskGraph, statuses: &HashMap<NodeIndex, TaskStatus>) {
 
 fn resolve_build_targets_from_metadata(ctx: &Context, requested: &[Target]) -> Result<Vec<Target>> {
     let mut targets = if requested.is_empty() {
+        // supported_formats is the product policy. The development standalone
+        // remains outside that list because it is not a plugin format.
         let mut targets = ctx
             .metadata
             .supported_formats
@@ -855,6 +903,9 @@ fn validate_plugin_format_support(
         .copied()
         .collect::<HashSet<_>>();
     for format in formats {
+        // An explicit --target is a request, not a hint. If a package does not
+        // advertise that format, fail instead of silently falling back to the
+        // supported subset.
         if explicit && !supported.contains(format) {
             return Err(format!(
                 "{} is not listed in package.metadata.wrac.supported_formats for {}",

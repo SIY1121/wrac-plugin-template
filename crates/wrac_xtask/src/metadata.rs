@@ -22,6 +22,9 @@ pub(crate) struct PluginMetadata {
     pub(crate) support_url: String,
     pub(crate) description: String,
     pub(crate) copyright: String,
+    // Product-level plugin format policy. xtask uses this for default build,
+    // install, and validate selections so AAX adoption is decided once in
+    // metadata instead of repeated on every command line.
     pub(crate) supported_formats: Vec<PluginFormat>,
     pub(crate) plugins: Vec<PluginProductMetadata>,
     pub(crate) validation: ValidationMetadata,
@@ -138,6 +141,9 @@ impl PluginMetadata {
         if self.supported_formats.is_empty() {
             return Err("package.metadata.wrac.supported_formats must not be empty".into());
         }
+        // Treat duplicates as metadata errors rather than silently deduplicating:
+        // supported_formats is commercial product policy, so ambiguity here is
+        // more likely to hide a setup mistake than help a caller.
         let mut supported_formats = HashSet::new();
         for format in &self.supported_formats {
             if !supported_formats.insert(*format) {

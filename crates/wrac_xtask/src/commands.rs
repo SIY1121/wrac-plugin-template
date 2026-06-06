@@ -252,6 +252,8 @@ pub(crate) fn package_clap(ctx: &Context, profile: BuildProfile) -> Result<()> {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum WrapperBuild {
+    // VST3 and AU share the same private-SDK-free wrapper configure. AAX is
+    // deliberately separate so VST3/AU builds do not require AAX_SDK_ROOT.
     Plugins { vst3: bool, au: bool },
     Aax,
     Standalone,
@@ -267,6 +269,9 @@ impl WrapperBuild {
     }
 
     fn target_name_base(self, ctx: &Context) -> String {
+        // clap_wrapper_builder derives its CMake target names from this cache
+        // variable. Keep xtask's derivation in one place so DAG task names can
+        // map predictably to concrete CMake targets.
         format!(
             "{}_{}",
             ctx.metadata.package_name,
@@ -350,6 +355,9 @@ pub(crate) fn configure_wrapper(
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_STANDALONE=OFF");
         }
         WrapperBuild::Aax => {
+            // AAX target creation happens during CMake configure and requires
+            // the Avid SDK root. Keeping this in wrap-aax-* avoids rewriting the
+            // VST3/AU CMake cache when users switch between targets.
             configure
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_VST3=OFF")
                 .arg("-DCLAP_WRAPPER_BUILDER_BUILD_AUV2=OFF")
@@ -404,6 +412,9 @@ pub(crate) fn build_wrapper_target(
 ) -> Result<()> {
     let build_dir = ctx.cmake_dir(build.purpose(), profile);
     for cmake_target in cmake_wrapper_targets(ctx, build, target) {
+        // Build the concrete CMake target for this DAG node instead of ALL_BUILD.
+        // That keeps dry-run output aligned with the actual work and lets
+        // independent format tasks fail or pass separately.
         let mut build_cmd = Command::new("cmake");
         build_cmd
             .arg("--build")
@@ -518,6 +529,10 @@ fn cmake_wrapper_targets(ctx: &Context, build: WrapperBuild, target: WrapperTarg
 }
 
 fn cmake_identifier(value: &str) -> String {
+    // CMake's string(MAKE_C_IDENTIFIER) is used by clap_wrapper_builder when it
+    // creates product-specific AU targets. Mirror the part of that contract xtask
+    // needs for --target builds; otherwise multi-product AU builds would plan a
+    // target name that CMake never generated.
     let mut identifier = value
         .chars()
         .map(|ch| {
