@@ -15,6 +15,10 @@
  *   the Rust side calls Channel::send().
  */
 import { Channel, invoke } from "@novonotes/webview-bridge";
+import {
+  type FrontendRuntimeContext,
+  installNativeCursorBridge,
+} from "./nativeCursorBridge";
 import "./style.css";
 
 type PluginMetadata = {
@@ -119,6 +123,10 @@ type ResizeResponse = {
   height?: number;
 };
 
+function writeFrontendLog(message: string): void {
+  void invoke("write_to_log", { message }).catch(() => undefined);
+}
+
 function isEditableElement(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLInputElement ||
@@ -222,9 +230,11 @@ void (async () => {
   editorPageSubscriptionId = editorPageSubscription.subscriptionId;
   // Log frontend initialization to the native log without relying on the WebView console.
   // Some environments inside a DAW do not allow opening devtools, so this boundary log is preserved.
-  await invoke("write_to_log", {
-    message: "GUI initialization completed",
-  });
+  writeFrontendLog("GUI initialization completed");
+  const runtimeContext = await invoke<FrontendRuntimeContext>(
+    "get_frontend_runtime_context",
+  ).catch(() => ({}));
+  installNativeCursorBridge(runtimeContext);
 })();
 
 function clamp(value: number): number {
