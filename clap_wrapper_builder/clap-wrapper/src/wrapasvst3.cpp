@@ -1251,11 +1251,17 @@ bool ClapAsVst3::gui_request_resize(uint32_t width, uint32_t height)
   // UIs with 65kx65k resolution are not supported
   if ((width > 0xffff) || (height > 0xffff)) return false;
 
-  // CLAP marks gui.request_resize() as thread-safe, but WRAC issues these resize
-  // requests from its GUI run-loop command path. Until the wrapper records a real
-  // main-thread id upstream, do not treat the default-constructed id as "not main":
-  // Audacity macOS VST3 never drains this deferred onIdle path, so deferring here
-  // drops WRAC resize requests before they reach resizeView().
+  // Deferring this request breaks WRAC resizing in Audacity macOS VST3: Audacity
+  // does not drain the wrapper's onIdle resize queue, so resizeView() is never
+  // reached and the host window falls out of sync with the inner WebView. In this
+  // vendored WRAC subtree, a missing main-thread id therefore falls through to the
+  // direct WrappedView::request_resize() path.
+  //
+  // CLAP defines gui.request_resize() as thread-safe, but WRAC only calls it from
+  // its GUI run-loop command path, so this direct path is valid for WRAC.
+  //
+  // TODO: Remove this workaround once the upstream wrapper records the actual
+  // main-thread id and can reliably choose between the direct and deferred paths.
   if (hasMainThreadId && _main_thread_id != std::this_thread::get_id())
   {
     uint32_t newSize = ((width & 0xffff) << 16) | (height & 0xffff);
