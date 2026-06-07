@@ -20,7 +20,10 @@ import {
   installNativeCursorBridge,
   installResizeBridge,
 } from "./wracRuntime";
+import { installConsoleLogPipe } from "./nativeLog";
 import "./style.css";
+
+installConsoleLogPipe();
 
 type PluginMetadata = {
   pluginId: string;
@@ -117,10 +120,6 @@ let gestureActive = false;
 let parameterSubscriptionId: number | undefined;
 let editorPageSubscriptionId: number | undefined;
 let pluginMetadata: PluginMetadata | undefined;
-
-function writeFrontendLog(message: string): void {
-  void invoke("write_to_log", { message }).catch(() => undefined);
-}
 
 function isEditableElement(target: EventTarget | null): boolean {
   return (
@@ -223,9 +222,7 @@ void (async () => {
     },
   );
   editorPageSubscriptionId = editorPageSubscription.subscriptionId;
-  // Log frontend initialization to the native log without relying on the WebView console.
-  // Some environments inside a DAW do not allow opening devtools, so this boundary log is preserved.
-  writeFrontendLog("GUI initialization completed");
+  console.info("GUI initialization completed");
   const runtimeContext = await invoke<FrontendRuntimeContext>(
     "get_frontend_runtime_context",
   ).catch(() => ({}));
