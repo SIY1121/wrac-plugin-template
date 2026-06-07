@@ -4,7 +4,7 @@ use wxp::WxpCommandHandler;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub(super) fn register_native_cursor_commands(command_handler: &WxpCommandHandler) {
+pub(super) fn register_native_cursor_bridge_commands(command_handler: &WxpCommandHandler) {
     command_handler.register_sync("apply_native_cursor", move |ctx| {
         let cursor_intent = ctx
             .arg::<String>("cursorIntent")
@@ -300,6 +300,8 @@ fn apply_edge_resize_cursor(edge: ResizeEdge) -> CursorApplyResult {
     use objc2::sel;
     use objc2_app_kit::{NSCursor, NSCursorFrameResizeDirections, NSCursorFrameResizePosition};
 
+    // The frame-resize cursor API is newer than the template's macOS 11 floor.
+    // Check selector availability before calling it so older systems fall back safely.
     if class_method_exists(sel!(frameResizeCursorFromPosition:inDirections:)) {
         let position = match edge {
             ResizeEdge::E => NSCursorFrameResizePosition::Right,

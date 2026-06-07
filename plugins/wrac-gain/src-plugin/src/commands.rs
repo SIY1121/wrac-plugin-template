@@ -21,7 +21,7 @@ use crate::state::{EditorPage, ProjectStateStore, SharedState};
 mod cursor;
 mod resize;
 
-use cursor::register_native_cursor_commands;
+use cursor::register_native_cursor_bridge_commands;
 use resize::register_resize_commands;
 
 pub(crate) struct CommandRegistrationDependencies {
@@ -256,7 +256,7 @@ pub(crate) fn register_commands(
         host_gui_resize_requester,
         gui_resize_handle,
     );
-    register_native_cursor_commands(&command_handler);
+    register_native_cursor_bridge_commands(&command_handler);
 }
 
 fn frontend_runtime_context(host_context: &HostContext) -> serde_json::Value {
