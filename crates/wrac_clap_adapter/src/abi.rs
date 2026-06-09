@@ -29,7 +29,7 @@ use clap_sys::process::{
 };
 use clap_sys::version::clap_version_is_compatible;
 use parking_lot::Mutex;
-use wrac_host_context::HostContext;
+use wrac_host_context::{HostContext, PluginFormat};
 
 mod audio_buffers;
 mod audio_ports;
@@ -42,6 +42,7 @@ mod params_extension;
 mod render_extension;
 mod state_extension;
 mod tail_extension;
+mod vst3_extension;
 
 use self::audio_buffers::audio_buffers;
 use self::ffi::{ffi_bool, ffi_ptr, ffi_status, ffi_unit, four_char_code};
@@ -52,8 +53,9 @@ use crate::entry::{
 use crate::factory::{
     AaxFactoryState, Auv2FactoryState, ClapPluginFactoryAsAax, ClapPluginFactoryAsAuv2,
     ClapPluginFactoryAsVst3, ClapPluginInfoAsAax, ClapPluginInfoAsAuv2, ClapPluginInfoAsVst3,
-    Vst3FactoryState, aax_factory_ptr, aax_factory_state, auv2_factory_ptr, auv2_factory_state,
-    clap_factory_state, factory_ptr, vst3_factory_ptr, vst3_factory_state,
+    Vst3FactoryState, WracPluginMainThreadHook, aax_factory_ptr, aax_factory_state,
+    auv2_factory_ptr, auv2_factory_state, clap_factory_state, factory_ptr, main_thread_hook_ptr,
+    main_thread_hook_state, vst3_factory_ptr, vst3_factory_state,
 };
 use crate::host_gui::HostGuiResizeRequest;
 use crate::host_state::HostStateDirtyNotification;
@@ -72,9 +74,11 @@ const CLAP_PLUGIN_FACTORY_INFO_AUV2: &CStr = c"clap.plugin-factory-info-as-auv2.
 // clap-wrapper can infer VST3 metadata from CLAP descriptors, but commercial products
 // need stable VST3 class IDs and explicit host browser categories across wrapper updates.
 const CLAP_PLUGIN_FACTORY_INFO_VST3: &CStr = c"clap.plugin-factory-info-as-vst3/0";
+const CLAP_PLUGIN_AS_VST3: &CStr = c"clap.plugin-info-as-vst3/0";
 // AAX declares manufacturer/product/stem IDs at factory time, so commercial
 // products must provide this extension rather than relying on wrapper-generated IDs.
 const CLAP_PLUGIN_FACTORY_INFO_AAX: &CStr = c"clap.plugin-factory-info-as-aax/1";
+const WRAC_PLUGIN_MAIN_THREAD_HOOK: &CStr = c"com.novonotes.wrac.plugin-main-thread-hook/0";
 
 /// Synchronization boundary between a CLAP instance and the Rust core.
 ///
@@ -86,6 +90,7 @@ const CLAP_PLUGIN_FACTORY_INFO_AAX: &CStr = c"clap.plugin-factory-info-as-aax/1"
 /// save failed" to the host — no crash, but project data and routing can be corrupted.
 pub(crate) struct PluginInstance {
     plugin: clap_plugin,
+    registration: &'static EntryRegistration,
     // Owner of the processor lifecycle; only activate/deactivate take this lock.
     core: Mutex<Box<dyn PluginCore>>,
     // Capability presence is frozen at instance creation. Coupling it to runtime state
@@ -137,10 +142,10 @@ impl PluginInstance {
         descriptor_index: usize,
         plugin_id: &str,
         host: *const clap_host,
+        clap_host_name: Option<String>,
+        host_context: HostContext,
     ) -> Option<Box<Self>> {
         let parameter_edits = Arc::new(ParameterEditQueue::new(host));
-        let clap_host_name = unsafe { clap_host_name(host) };
-        let host_context = HostContext::detect_current(clap_host_name.as_deref());
         // Pass as a safe proxy so product GUI code can hold it without knowing about
         // host pointers or CLAP event lifetimes.
         let context = PluginCoreContext {
@@ -201,6 +206,7 @@ impl PluginInstance {
                 get_extension: Some(plugin_get_extension),
                 on_main_thread: Some(plugin_on_main_thread),
             },
+            registration,
             core: Mutex::new(core),
             capabilities,
             audio_ports,
@@ -414,6 +420,8 @@ pub(crate) unsafe extern "C" fn entry_get_factory(
         let storage = registration.storage();
         if factory_id == CLAP_PLUGIN_FACTORY_ID {
             factory_ptr(storage)
+        } else if factory_id == WRAC_PLUGIN_MAIN_THREAD_HOOK {
+            main_thread_hook_ptr(storage)
         } else if factory_id == CLAP_PLUGIN_FACTORY_INFO_AUV2
             && storage
                 .descriptors
@@ -438,6 +446,26 @@ pub(crate) unsafe extern "C" fn entry_get_factory(
         } else {
             ptr::null()
         }
+    })
+}
+
+pub(crate) unsafe extern "C" fn main_thread_hook_attach(hook: *const WracPluginMainThreadHook) {
+    ffi_unit(|| {
+        let Some(state) = main_thread_hook_state(hook) else {
+            log::warn!("main_thread_hook.attach: invalid hook pointer");
+            return;
+        };
+        state.registration.entry.attach_main_thread();
+    })
+}
+
+pub(crate) unsafe extern "C" fn main_thread_hook_detach(hook: *const WracPluginMainThreadHook) {
+    ffi_unit(|| {
+        let Some(state) = main_thread_hook_state(hook) else {
+            log::warn!("main_thread_hook.detach: invalid hook pointer");
+            return;
+        };
+        state.registration.entry.detach_main_thread();
     })
 }
 
@@ -577,9 +605,24 @@ pub(crate) unsafe extern "C" fn factory_create_plugin(
             return ptr::null();
         };
 
-        let Some(mut instance) =
-            PluginInstance::new(registration, descriptor_index, plugin_id, host)
-        else {
+        let clap_host_name = unsafe { clap_host_name(host) };
+        let host_context = HostContext::detect_current(clap_host_name.as_deref());
+        let attach_in_adapter = host_context.plugin_format == PluginFormat::Unknown;
+        if attach_in_adapter {
+            registration.entry.attach_main_thread();
+        }
+
+        let Some(mut instance) = PluginInstance::new(
+            registration,
+            descriptor_index,
+            plugin_id,
+            host,
+            clap_host_name,
+            host_context,
+        ) else {
+            if attach_in_adapter {
+                registration.entry.detach_main_thread();
+            }
             log::warn!("factory.create_plugin: product factory returned no plugin core");
             return ptr::null();
         };
@@ -607,6 +650,8 @@ unsafe extern "C" fn plugin_destroy(plugin: *const clap_plugin) {
             log::warn!("plugin.destroy: missing plugin instance");
             return;
         };
+        let detach_in_adapter = instance.host_context.plugin_format == PluginFormat::Unknown;
+        let registration = instance.registration;
         let guard = instance.enter_lifecycle_blocking();
 
         if let Some(gui) = &instance.gui {
@@ -629,6 +674,9 @@ unsafe extern "C" fn plugin_destroy(plugin: *const clap_plugin) {
         let data = unsafe { (*plugin).plugin_data } as *mut PluginInstance;
         unsafe {
             drop(Box::from_raw(data));
+        }
+        if detach_in_adapter {
+            registration.entry.detach_main_thread();
         }
     });
 }
@@ -828,6 +876,8 @@ unsafe extern "C" fn plugin_get_extension(
             // zero-latency fallback keeps optional product support from becoming a null
             // extension pointer at the wrapper boundary.
             &latency_extension::LATENCY as *const _ as *const c_void
+        } else if id == CLAP_PLUGIN_AS_VST3 {
+            &vst3_extension::VST3 as *const _ as *const c_void
         } else {
             ptr::null()
         }

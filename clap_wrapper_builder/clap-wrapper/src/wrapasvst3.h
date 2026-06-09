@@ -411,6 +411,7 @@ class ClapAsVst3 : public Steinberg::Vst::SingleComponentEffect,
   std::atomic_bool _requestUICallback = false;
   std::atomic_bool _requestRestart = false;
   bool _missedLatencyRequest = false;
+  Clap::MainThreadAttachment _mainThreadAttachment;
 
   std::thread::id _main_thread_id{};
   static const uint32_t _gui_invalid_size = 0xffffffff;

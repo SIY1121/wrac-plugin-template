@@ -135,6 +135,10 @@ WrapAsAUV2::WrapAsAUV2(AUV2_Type type, const std::string &clapname, const std::s
        */
 
       // pffffrzz();  // <- enable this to have a hook to attach a debugger
+      // Attach in the AU Open/constructor path immediately before existing CLAP
+      // creation. Initialize()/Cleanup() are resource lifecycle callbacks, not the
+      // plugin object lifetime used by JUCE for main-thread setup.
+      _mainThreadAttachment.attach(&_library);
       _plugin = Clap::Plugin::createInstance(_library._pluginFactory, _desc->id, this);
       if (_plugin)
       {
@@ -148,6 +152,7 @@ WrapAsAUV2::WrapAsAUV2(AUV2_Type type, const std::string &clapname, const std::s
         // this will exit in WrapAsAUV2::Initialize() with an error
         // if this happens, the wrapper or the clap plugin has a real bug
         _desc = nullptr;
+        _mainThreadAttachment.detach();
       }
     }
   }
