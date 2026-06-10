@@ -8,11 +8,11 @@
 
 **確認すること:** audio processor から到達可能なコードがリアルタイム要件を満たすように書かれているか。project/editor state、GUI 通知、File IO、その他の非リアルタイムサービスへアクセスしていないか。
 
-realtime 経路のログも確認する。`Processor::process`、
-`Processor::apply_param_events`、host process callback から同期的に呼ばれる処理、
-`CoreDeviceRealtimeView` の query method から到達可能なコードでは、通常の `log::*`
-macro を使わない。realtime 経路でログが必要な場合は、realtime-safe な
-`wrac_log::rtwarn!` / `wrac_log::rtdebug!` を使う。
+realtime 経路のログも確認する。audio callback、その callback 内で行われる
+parameter / event 適用、host process callback から同期的に呼ばれる処理、
+realtime query method から到達可能なコードでは、通常の `log::*` macro を使わない。
+realtime 経路でログが必要な場合は、realtime-safe な `wrac_log::rtwarn!` /
+`wrac_log::rtdebug!` を使う。
 
 **理由:** assert_no_alloc のような allocation guard が検出できる問題はメモリアロケーションに関する一部だけです。blocking lock などの問題は検出できません。
 

@@ -8,7 +8,7 @@ repository = "https://github.com/novonotes/wrac-plugin-template"
 publish = false
 
 [dependencies]
-plist = { workspace = true }
+plist = "1.9.0"
 
 [lints.rust]
 unreachable_pub = "deny"

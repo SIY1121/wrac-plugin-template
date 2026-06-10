@@ -973,6 +973,26 @@ mod tests {
         assert_eq!(PluginFormat::detect("Native CLAP"), PluginFormat::Unknown);
     }
 
+    #[test]
+    fn detects_runtime_os_version() {
+        let os_version = SystemContext::detect()
+            .os_version
+            .expect("runtime OS version should be available");
+        let os_version = os_version.trim();
+        assert!(!os_version.is_empty());
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            assert!(os_version.chars().any(|ch| ch.is_ascii_digit()));
+            assert!(os_version.contains('.'));
+        }
+
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            assert!(os_version.chars().any(|ch| ch.is_ascii_alphanumeric()));
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn detects_macos_hosts_like_existing_adapter() {
