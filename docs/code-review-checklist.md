@@ -12,6 +12,12 @@ not reliably prove.
 requirements and does not access project/editor state, GUI notifications, file
 I/O, or other non-realtime services.
 
+Also check logging in realtime paths. Code reachable from `Processor::process`,
+`Processor::apply_param_events`, host process callbacks, or
+`CoreDeviceRealtimeView` query methods must not use regular `log::*` macros.
+When realtime-path logging is unavoidable, use realtime-safe
+`wrac_log::rtwarn!` / `wrac_log::rtdebug!` instead.
+
 **Why:** Allocation guards such as assert_no_alloc catch only part of the
 problem: memory allocation. They do not catch issues such as blocking locks.
 
