@@ -12,6 +12,32 @@ const RT_TARGET_CAPACITY: usize = 96;
 
 static RT_LOG: OnceLock<RtLogInner> = OnceLock::new();
 static RT_DRAIN_WORKER: Mutex<Option<RtDrainWorker>> = Mutex::new(None);
+static RT_LOG_SESSION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Keeps realtime log draining alive for one plugin instance.
+///
+/// Dropping the last session stops the background drain worker before the plugin
+/// binary can be unloaded by the host.
+#[must_use = "keep LogSession alive for the plugin instance lifetime"]
+pub struct LogSession {
+    _private: (),
+}
+
+impl LogSession {
+    pub(crate) fn start() -> Self {
+        let previous_count = RT_LOG_SESSION_COUNT.fetch_add(1, Ordering::AcqRel);
+        if previous_count == 0 {
+            start_drain_if_enabled();
+        }
+        Self { _private: () }
+    }
+}
+
+impl Drop for LogSession {
+    fn drop(&mut self) {
+        release_log_session();
+    }
+}
 
 /// Configuration for the background realtime log drain worker.
 pub struct RtDrainConfig {
@@ -71,12 +97,29 @@ pub fn init_rt_log_drain_once(config: RtDrainConfig) {
     });
 }
 
-/// Stops the realtime log drain worker and waits until its thread has exited.
-///
-/// Plugin binaries can be unloaded by hosts after scanning. Any Rust thread left
-/// running from the plugin DLL may resume inside unloaded code, so plugin entry
-/// points should call this from their unload/deinit path.
-pub fn shutdown_rt_log_drain() {
+fn release_log_session() {
+    let mut current_count = RT_LOG_SESSION_COUNT.load(Ordering::Acquire);
+    loop {
+        if current_count == 0 {
+            return;
+        }
+        match RT_LOG_SESSION_COUNT.compare_exchange_weak(
+            current_count,
+            current_count - 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(1) => {
+                shutdown_rt_log_drain();
+                return;
+            }
+            Ok(_) => return,
+            Err(next_count) => current_count = next_count,
+        }
+    }
+}
+
+fn shutdown_rt_log_drain() {
     let worker = RT_DRAIN_WORKER
         .lock()
         .ok()
@@ -348,6 +391,22 @@ fn u8_to_level(level: u8) -> Level {
 mod tests {
     use super::*;
 
+    static SESSION_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn reset_sessions_for_test() {
+        while RT_LOG_SESSION_COUNT.load(Ordering::Acquire) > 0 {
+            release_log_session();
+        }
+        shutdown_rt_log_drain();
+    }
+
+    fn drain_worker_is_running() -> bool {
+        RT_DRAIN_WORKER
+            .lock()
+            .map(|worker| worker.is_some())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn drain_stops_before_unpublished_slot() {
         let log = RtLogInner::new();
@@ -373,5 +432,34 @@ mod tests {
             std::str::from_utf8(message.as_bytes()).unwrap().len(),
             message.len,
         );
+    }
+
+    #[test]
+    fn log_session_stops_drain_worker_after_last_drop() {
+        let _guard = SESSION_TEST_MUTEX
+            .lock()
+            .expect("session test mutex poisoned");
+        reset_sessions_for_test();
+
+        let first_session = LogSession::start();
+        let second_session = LogSession::start();
+
+        assert_eq!(RT_LOG_SESSION_COUNT.load(Ordering::Acquire), 2);
+        assert!(drain_worker_is_running());
+
+        drop(first_session);
+        assert_eq!(RT_LOG_SESSION_COUNT.load(Ordering::Acquire), 1);
+        assert!(drain_worker_is_running());
+
+        drop(second_session);
+        assert_eq!(RT_LOG_SESSION_COUNT.load(Ordering::Acquire), 0);
+        assert!(!drain_worker_is_running());
+
+        let restarted_session = LogSession::start();
+        assert_eq!(RT_LOG_SESSION_COUNT.load(Ordering::Acquire), 1);
+        assert!(drain_worker_is_running());
+
+        drop(restarted_session);
+        reset_sessions_for_test();
     }
 }

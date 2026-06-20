@@ -13,9 +13,9 @@ pub use file_logger::{
 };
 #[doc(hidden)]
 pub use rt::write_rt_log as __write_rt_log;
-pub use rt::{RtDrainConfig, drain_rt_logs_once, init_rt_log_drain_once, shutdown_rt_log_drain};
+pub use rt::{LogSession, RtDrainConfig, drain_rt_logs_once, init_rt_log_drain_once};
 
-/// Initializes logging for a WRAC plugin.
+/// Initializes logging for a WRAC plugin and returns a session guard.
 ///
 /// This macro must be called from the plugin crate so `CARGO_MANIFEST_DIR` points at
 /// the caller. In debug builds, the default log directory is resolved as
@@ -23,6 +23,8 @@ pub use rt::{RtDrainConfig, drain_rt_logs_once, init_rt_log_drain_once, shutdown
 /// crate would resolve that path relative to `wrac_log` instead.
 ///
 /// Initialization is process-wide and idempotent. The first call wins.
+/// Keep the returned [`LogSession`] alive for the plugin instance lifetime so
+/// realtime log draining stops only after the last instance is dropped.
 ///
 /// Output destination priority:
 /// 1. `WRAC_LOG_DIR`
