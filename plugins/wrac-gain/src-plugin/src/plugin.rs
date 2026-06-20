@@ -50,6 +50,10 @@ impl PluginEntry for WracGainEntry {
     fn plugin_factory(&self) -> Option<&dyn PluginFactory> {
         Some(&WRAC_GAIN_FACTORY)
     }
+
+    fn deinit(&self) {
+        wrac_log::shutdown_rt_log_drain();
+    }
 }
 
 static WRAC_GAIN_FACTORY: WracGainFactory = WracGainFactory;

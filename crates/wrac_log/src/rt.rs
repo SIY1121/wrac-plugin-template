@@ -1,9 +1,9 @@
 use log::Level;
 use std::array;
 use std::fmt::{self, Write as _};
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
-use std::thread;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const RT_LOG_CAPACITY: usize = 4096;
@@ -11,7 +11,7 @@ const RT_MESSAGE_CAPACITY: usize = 256;
 const RT_TARGET_CAPACITY: usize = 96;
 
 static RT_LOG: OnceLock<RtLogInner> = OnceLock::new();
-static RT_DRAIN_WORKER: OnceLock<()> = OnceLock::new();
+static RT_DRAIN_WORKER: Mutex<Option<RtDrainWorker>> = Mutex::new(None);
 
 /// Configuration for the background realtime log drain worker.
 pub struct RtDrainConfig {
@@ -34,28 +34,76 @@ impl RtDrainConfig {
     }
 }
 
-/// Starts the realtime log drain worker once for the current process.
+/// Starts the realtime log drain worker when it is not already running.
 ///
 /// This is called automatically by [`crate::init!`] in debug builds and when
 /// `WRAC_RT_LOG` is set. Calling it directly is useful for tests or custom host
 /// integration.
 pub fn init_rt_log_drain_once(config: RtDrainConfig) {
-    RT_DRAIN_WORKER.get_or_init(|| {
-        let interval = config.interval;
-        let _ = thread::Builder::new()
-            .name("wrac-rt-log-drain".to_string())
-            .spawn(move || {
-                loop {
-                    thread::sleep(interval);
-                    drain_rt_logs_once();
+    let Ok(mut worker) = RT_DRAIN_WORKER.lock() else {
+        return;
+    };
+    if worker.is_some() {
+        return;
+    }
+
+    let interval = config.interval;
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let thread_stop_requested = stop_requested.clone();
+    let Ok(handle) = thread::Builder::new()
+        .name("wrac-rt-log-drain".to_string())
+        .spawn(move || {
+            while !thread_stop_requested.load(Ordering::Acquire) {
+                thread::park_timeout(interval);
+                if thread_stop_requested.load(Ordering::Acquire) {
+                    break;
                 }
-            });
+                drain_existing_rt_logs_once();
+            }
+            drain_existing_rt_logs_once();
+        })
+    else {
+        return;
+    };
+    *worker = Some(RtDrainWorker {
+        stop_requested,
+        handle,
     });
+}
+
+/// Stops the realtime log drain worker and waits until its thread has exited.
+///
+/// Plugin binaries can be unloaded by hosts after scanning. Any Rust thread left
+/// running from the plugin DLL may resume inside unloaded code, so plugin entry
+/// points should call this from their unload/deinit path.
+pub fn shutdown_rt_log_drain() {
+    let worker = RT_DRAIN_WORKER
+        .lock()
+        .ok()
+        .and_then(|mut worker| worker.take());
+    let Some(worker) = worker else {
+        drain_existing_rt_logs_once();
+        return;
+    };
+
+    worker.stop_requested.store(true, Ordering::Release);
+    let thread = worker.handle.thread().clone();
+    thread.unpark();
+    if thread.id() != thread::current().id() {
+        let _ = worker.handle.join();
+    }
+    drain_existing_rt_logs_once();
 }
 
 /// Drains the global realtime log once on the current thread.
 pub fn drain_rt_logs_once() {
     rt_log().drain_to_log();
+}
+
+fn drain_existing_rt_logs_once() {
+    if let Some(rt_log) = RT_LOG.get() {
+        rt_log.drain_to_log();
+    }
 }
 
 pub(crate) fn start_drain_if_enabled() {
@@ -71,6 +119,11 @@ pub(crate) fn start_drain_if_enabled() {
 #[doc(hidden)]
 pub fn write_rt_log(level: Level, target: &'static str, args: fmt::Arguments<'_>) {
     rt_log().write_fmt(level, target, args);
+}
+
+struct RtDrainWorker {
+    stop_requested: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
 }
 
 fn rt_log() -> &'static RtLogInner {

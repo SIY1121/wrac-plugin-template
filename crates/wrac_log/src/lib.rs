@@ -13,7 +13,7 @@ pub use file_logger::{
 };
 #[doc(hidden)]
 pub use rt::write_rt_log as __write_rt_log;
-pub use rt::{RtDrainConfig, drain_rt_logs_once, init_rt_log_drain_once};
+pub use rt::{RtDrainConfig, drain_rt_logs_once, init_rt_log_drain_once, shutdown_rt_log_drain};
 
 /// Initializes logging for a WRAC plugin.
 ///
