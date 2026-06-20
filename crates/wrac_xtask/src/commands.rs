@@ -455,7 +455,7 @@ pub(crate) fn configure_wrapper(
         );
     }
 
-    if let Some(generator) = ctx.platform.cmake_generator() {
+    if let Some(generator) = cmake_generator(ctx.platform)? {
         push_cmake_arg(&mut args, "-G");
         push_cmake_arg(&mut args, generator);
     }
@@ -583,6 +583,99 @@ fn cmake_wrapper_targets(ctx: &Context, build: WrapperBuild, target: WrapperTarg
 
 fn push_cmake_arg(args: &mut Vec<OsString>, arg: impl Into<OsString>) {
     args.push(arg.into());
+}
+
+fn cmake_generator(platform: Platform) -> Result<Option<String>> {
+    match platform {
+        Platform::Macos => Ok(platform.cmake_generator().map(ToOwned::to_owned)),
+        Platform::Windows => Ok(Some(windows_cmake_generator()?)),
+        Platform::Linux => Ok(None),
+    }
+}
+
+fn windows_cmake_generator() -> Result<String> {
+    if let Ok(generator) = env::var("WRAC_CMAKE_GENERATOR") {
+        let generator = generator.trim();
+        if !generator.is_empty() {
+            return Ok(generator.to_owned());
+        }
+    }
+
+    ensure_visual_studio_msbuild_available()?;
+    let generator = latest_cmake_visual_studio_generator()?;
+    println!("Using CMake generator: {generator}");
+    Ok(generator)
+}
+
+fn ensure_visual_studio_msbuild_available() -> Result<()> {
+    let mut vswhere = Command::new(vswhere_command());
+    vswhere.args([
+        "-products",
+        "*",
+        "-requires",
+        "Microsoft.Component.MSBuild",
+        "-latest",
+        "-property",
+        "installationPath",
+    ]);
+    let output = run_output(&mut vswhere)?;
+    let installation_path = String::from_utf8(output.stdout)?;
+    if installation_path.trim().is_empty() {
+        return Err("Visual Studio with MSBuild was not found by vswhere".into());
+    }
+    Ok(())
+}
+
+fn vswhere_command() -> PathBuf {
+    env::var_os("ProgramFiles(x86)")
+        .map(PathBuf::from)
+        .map(|program_files_x86| {
+            program_files_x86
+                .join("Microsoft Visual Studio")
+                .join("Installer")
+                .join("vswhere.exe")
+        })
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("vswhere"))
+}
+
+fn latest_cmake_visual_studio_generator() -> Result<String> {
+    let output = run_output(Command::new("cmake").arg("--help"))?;
+    let help = String::from_utf8(output.stdout)?;
+    select_latest_visual_studio_generator(&help)
+        .ok_or_else(|| "CMake does not list any Visual Studio generator".into())
+}
+
+fn select_latest_visual_studio_generator(help: &str) -> Option<String> {
+    cmake_visual_studio_generators(help)
+        .into_iter()
+        .filter_map(|generator| {
+            visual_studio_generator_version(&generator).map(|version| (version, generator))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, generator)| generator)
+}
+
+fn visual_studio_generator_version(generator: &str) -> Option<u32> {
+    let mut words = generator.split_whitespace();
+    match (words.next(), words.next(), words.next()) {
+        (Some("Visual"), Some("Studio"), Some(version)) => version.parse().ok(),
+        _ => None,
+    }
+}
+
+fn cmake_visual_studio_generators(help: &str) -> Vec<String> {
+    help.lines()
+        .filter_map(|line| {
+            let line = line
+                .trim_start()
+                .strip_prefix("* ")
+                .unwrap_or(line.trim_start());
+            let (name, _) = line.split_once(" = ")?;
+            let name = name.trim();
+            name.starts_with("Visual Studio").then(|| name.to_owned())
+        })
+        .collect()
 }
 
 fn cmake_configure_stamp_path(build_dir: &Path) -> PathBuf {
@@ -1925,6 +2018,44 @@ mod tests {
                 "822011CA37EC5CEF92D7EC7E67207195".to_string(),
                 "FFFF664CB96353E687CC2A7CEB29674B".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn parses_visual_studio_generators_from_cmake_help() {
+        let help = r#"
+Generators
+
+The following generators are available on this platform (* marks default):
+* Visual Studio 18 2026        = Generates Visual Studio 2026 project files.
+  Visual Studio 17 2022        = Generates Visual Studio 2022 project files.
+  Ninja                        = Generates build.ninja files.
+"#;
+
+        assert_eq!(
+            cmake_visual_studio_generators(help),
+            vec![
+                "Visual Studio 18 2026".to_owned(),
+                "Visual Studio 17 2022".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn selects_latest_visual_studio_generator_from_cmake_help() {
+        let help = r#"
+Generators
+
+The following generators are available on this platform (* marks default):
+  Visual Studio 17 2022        = Generates Visual Studio 2022 project files.
+* Visual Studio 16 2019        = Generates Visual Studio 2019 project files.
+  Visual Studio 15 2017 [arch] = Generates Visual Studio 2017 project files.
+  Ninja                        = Generates build.ninja files.
+"#;
+
+        assert_eq!(
+            select_latest_visual_studio_generator(help),
+            Some("Visual Studio 17 2022".to_owned())
         );
     }
 }
